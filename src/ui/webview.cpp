@@ -63,6 +63,10 @@ void wvLog(const std::wstring& line) {
 constexpr wchar_t kBrowserArgs[] =
     L"--disable-crash-reporter --disable-breakpad --noerrdialogs";
 
+// Posted to the host once the controller handle exists; the actual
+// initialisation runs from that message (see WebView::completeInit).
+constexpr UINT kInitMessage = WM_APP + 0x2C4;
+
 }  // namespace
 
 const wchar_t* WebView::hostClass() { return L"LlamaLauncherWebHost"; }
@@ -151,9 +155,12 @@ bool WebView::create(HWND parent, const std::wstring& userDataDir, const std::ws
                     return S_OK;
                 }
                 wvLog(L"environment created");
-                // The callback hands us a reference we own; storing it as-is
-                // (no extra AddRef) keeps the reference count balanced with
-                // destroy()'s single Release.
+                // Invoke() does NOT give us a reference: the object is only
+                // guaranteed alive for the duration of the callback. Storing
+                // the raw pointer without AddRef left a dangling pointer, and
+                // every later call through it (put_Bounds, put_IsVisible, ...)
+                // was use-after-free - the chat-view crash.
+                env->AddRef();
                 environment_ = env;
 
                 return env->CreateCoreWebView2Controller(
@@ -169,21 +176,21 @@ bool WebView::create(HWND parent, const std::wstring& userDataDir, const std::ws
                                 return S_OK;
                             }
                             wvLog(L"controller created");
+                            // Same ownership rule as the environment above.
                             controller_ = controller;
-                            controller->get_CoreWebView2((ICoreWebView2**)&core_);
-
-                            // Presentation is opt-in: a controller created while
-                            // the pane is still hidden stays blank until it is
-                            // explicitly marked visible.
-                            controller->put_IsVisible(visible_ ? TRUE : FALSE);
-
-                            settings();
-                            applyBounds();
-                            if (!pendingUrl_.empty() && core_)
-                                ((ICoreWebView2*)core_)->Navigate(pendingUrl_.c_str());
-
-                            initialised_ = true;
-                            notifyOwner();
+                            controller->AddRef();
+                            // The controller is NOT touched here. Calling
+                            // put_IsVisible / put_Bounds / Navigate while the
+                            // callback is still completing crashed with an
+                            // access violation inside WebView::setBounds
+                            // whenever the UI resized or left the chat view in
+                            // that window (the whole chat open/close path
+                            // calls setBounds). The actual initialisation
+                            // runs from a posted message instead - normal
+                            // message-loop context, after the callback has
+                            // fully returned.
+                            if (host_)
+                                ::PostMessageW(host_, kInitMessage, 0, 0);
                             return S_OK;
                         })
                         .Get());
@@ -230,7 +237,10 @@ void WebView::settings() {
 }
 
 void WebView::applyBounds() {
-    if (!host_ || !controller_) return;
+    // Gate on initialised_: before the deferred init ran, the controller
+    // object exists but is not safe to call into (that call is exactly where
+    // the chat open/close crash happened).
+    if (!host_ || !controller_ || !initialised_) return;
     RECT rc{};
     ::GetClientRect(host_, &rc);
     // Bounds are relative to the window that owns the controller, so they are
@@ -247,18 +257,44 @@ void WebView::setBounds(const RECT& bounds) {
 
 void WebView::setVisible(bool visible) {
     visible_ = visible;
-    if (controller_)
-        ((ICoreWebView2Controller*)controller_)->put_IsVisible(visible ? TRUE : FALSE);
-    if (host_) ::InvalidateRect(host_, nullptr, FALSE);
+    // The controller's IsVisible is only ever switched ON, and only once the
+    // deferred init is done. On/off for the user is done by showing/hiding the
+    // host window, which takes the browser's child windows with it and is
+    // safe at any point of the initialisation.
+    if (visible && controller_ && initialised_)
+        ((ICoreWebView2Controller*)controller_)->put_IsVisible(TRUE);
+    if (host_) {
+        ::ShowWindow(host_, visible ? SW_SHOW : SW_HIDE);
+        ::InvalidateRect(host_, nullptr, FALSE);
+    }
 }
 
 void WebView::navigate(const std::wstring& url) {
     pendingUrl_ = url;
-    if (core_) ((ICoreWebView2*)core_)->Navigate(url.c_str());
+    // Before the init step the browser must not be touched; completeInit
+    // navigates to pendingUrl_ once it is safe.
+    if (core_ && initialised_) ((ICoreWebView2*)core_)->Navigate(url.c_str());
 }
 
 void WebView::reload() {
-    if (core_) ((ICoreWebView2*)core_)->Reload();
+    if (core_ && initialised_) ((ICoreWebView2*)core_)->Reload();
+}
+
+// Runs from the posted init message: the controller callback has fully
+// returned, so the object can now be called into.
+void WebView::completeInit() {
+    if (!controller_ || initialised_) return;
+    ((ICoreWebView2Controller*)controller_)->get_CoreWebView2((ICoreWebView2**)&core_);
+    initialised_ = true;
+    // Presentation is always on once the controller exists; on/off for the
+    // user is host-window visibility (see setVisible).
+    ((ICoreWebView2Controller*)controller_)->put_IsVisible(TRUE);
+    settings();
+    applyBounds();
+    if (!pendingUrl_.empty() && core_)
+        ((ICoreWebView2*)core_)->Navigate(pendingUrl_.c_str());
+    wvLog(L"controller initialised");
+    notifyOwner();
 }
 
 void WebView::destroy() {
@@ -314,6 +350,11 @@ void WebView::onHostMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& out) {
     (void)lp;
     out = 0;
     switch (msg) {
+        case kInitMessage:
+            // Deferred controller initialisation - see the creation callback.
+            completeInit();
+            return;
+
         case WM_ERASEBKGND:
             out = 1;
             return;

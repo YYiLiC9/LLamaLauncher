@@ -47,6 +47,8 @@ enum class Action {
     ClearSearch,
     CloseChat,
     ReloadChat,
+    MinimizeMonitor,  // shrink the resource view to the corner ball
+    RestoreMonitor,   // ball click: bring the resource view back
 };
 
 struct Hit {

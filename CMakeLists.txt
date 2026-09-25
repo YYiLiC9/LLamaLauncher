@@ -49,7 +49,11 @@ target_include_directories(LlamaLauncher PRIVATE
 # the Edge WebView2 runtime that ships with Windows 11.
 if(MSVC)
     target_link_libraries(LlamaLauncher PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib)
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib
+        dbghelp)
+    # Keep a map file next to the binary: crash dumps record RVA-only fault
+    # addresses, and the map is how they get matched back to a symbol.
+    target_link_options(LlamaLauncher PRIVATE "/MAP" "/MAPINFO:EXPORTS")
 endif()
 
 target_include_directories(LlamaLauncher PRIVATE src)

@@ -184,6 +184,8 @@ static const Entry kTable[] = {
                         L"or open the page in your browser instead.",
                         L"未检测到 WebView2 运行时。请安装该组件，或改用系统浏览器打开。"},
     /*Reload*/ {L"Reload", L"重新加载"},
+    /*ChatNeedsServer*/ {L"Start the server first - the chat page needs it running.",
+                         L"服务尚未启动，启动后才能打开对话页。"},
     /*CommandPreview*/ {L"Command preview", L"启动命令预览"},
     /*NameDuplicate*/ {L"A configuration with this name already exists.",
                        L"已存在同名配置，请换一个名称。"},

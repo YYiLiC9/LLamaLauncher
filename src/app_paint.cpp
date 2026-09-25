@@ -311,6 +311,35 @@ void App::paintContent(Canvas& c, const Frame& f) {
             break;
     }
 
+    // Corner ball while the server runs and the monitor is not on screen:
+    // leaving the Running view minimizes it, and this is what brings it back.
+    // Not drawn in the chat view - the WebView pane covers that area, so the
+    // ball there would be unreachable; the chat bar's back button already
+    // returns to the live view. Needs a selection: the monitor reports on the
+    // selected configuration, and a Running view without one snaps back to
+    // the welcome screen, which would make the ball a dead end.
+    if (selected() && processAlive() && view_ != View::Running && view_ != View::Chat) {
+        int d = theme::M.px(52);
+        Rect ball{f.content.right() - d - theme::M.px(24), f.content.bottom() - d - theme::M.px(24),
+                  d, d};
+        int idx = (int)hits_.size();
+        addHit(ball, Action::RestoreMonitor);
+        bool hov = idx == hoverIndex_;
+        bool pre = idx == pressIndex_;
+        int cx = ball.cx(), cy = ball.cy(), r = d / 2;
+        COLORREF base = theme::Accent;
+        if (pre)
+            base = theme::blend(base, RGB(0, 0, 0), theme::PressAlpha);
+        else if (hov)
+            base = theme::blend(base, RGB(255, 255, 255), theme::HoverAlpha);
+        c.circle(cx + theme::M.px(2), cy + theme::M.px(3), r - theme::M.px(2),
+                 theme::blend(theme::LayerBg, RGB(0, 0, 0), 90));
+        c.circle(cx, cy, r, base);
+        c.circleOutline(cx, cy, r - 1, theme::blend(theme::Accent, RGB(255, 255, 255), 120), 1);
+        c.glyph(Rect{ball.x, ball.cy() - theme::M.px(14), ball.w, theme::M.px(28)},
+                shell::glyphs::kGauge, theme::TextOnAccent, 20);
+    }
+
     ::SelectClipRgn(c.dc(), nullptr);
     ::DeleteObject(clip);
 }
@@ -445,28 +474,48 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
     y = header.bottom() + theme::M.gapLarge;
 
     // ---- command line preview ----
-    Rect cmdCard{x, y, w, theme::M.px(96)};
+    // The card grows with the wrapped line count, so the whole command stays
+    // visible: a fixed-height box drew an ellipsis on the last line, which
+    // made the copy button copy something the user could not see or check.
+    // Wrap accounting mirrors the editor's preview - the mono face is measured
+    // once and lines are counted by character budget.
+    std::wstring cmd = store::buildDisplayCommand(cfg, store_.serverExe());
+    int textOuterW = w - theme::M.px(32);
+    int textInnerW = textOuterW - theme::M.px(16);   // the box's own inset
+    SIZE msz{};
+    HGDIOBJ oldMono = ::SelectObject(c.dc(), theme::fontMono());
+    ::GetTextExtentPoint32W(c.dc(), L"MM", 2, &msz);
+    ::SelectObject(c.dc(), oldMono);
+    int charW = std::max(1, (int)(msz.cx / 2));
+    int perLine = std::max(1, textInnerW / charW);
+    int lines = std::max(1, (int)((cmd.size() + perLine - 1) / perLine));
+    int lineH = theme::lineHeight(theme::fontMono());
+    int textH = lines * lineH + theme::M.px(12);
+    int cmdCardH = theme::M.px(8) + theme::M.px(28) + theme::M.px(8) + textH + theme::M.px(16);
+
+    Rect cmdCard{x, y, w, cmdCardH};
     shell::card(c, cmdCard);
+
+    // Title row: the section caption on the left, the copy button on the right.
+    // The button width follows the measured label (icon + gap + text + padding):
+    // fixed widths clipped the caption to "复制命令..." at high DPI.
+    int copyBtnW = theme::M.px(50) + c.textWidth(T(Str::CopyCommand), theme::fontBody());
+    Rect copyBtn{cmdCard.right() - theme::M.px(16) - copyBtnW,
+                 cmdCard.y + theme::M.px(8), copyBtnW, theme::M.px(28)};
     shell::sectionTitle(c, Rect{cmdCard.x + theme::M.px(16), cmdCard.y + theme::M.px(8),
-                                cmdCard.w - theme::M.px(32), theme::M.px(18)},
-                     T(Str::DetailCommand));
-
-    Rect cmdText{cmdCard.x + theme::M.px(16), cmdCard.y + theme::M.px(28),
-                 cmdCard.w - theme::M.px(32) - theme::M.px(96), theme::M.px(56)};
-    c.fillRound(cmdText, theme::M.radiusSmall, theme::fieldBack(false));
-    c.textBlock(cmdText.inset(theme::M.px(8)), store::buildDisplayCommand(cfg, store_.serverExe()),
-                theme::TextSecondary, theme::fontMono(),
-                DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
-
-    Rect copyBtn{cmdCard.right() - theme::M.px(16) - theme::M.px(88),
-                 cmdCard.bottom() - theme::M.px(16) - theme::M.px(30), theme::M.px(88),
-                 theme::M.px(30)};
+                                copyBtn.x - cmdCard.x - theme::M.px(32), theme::M.px(28)},
+                        T(Str::DetailCommand));
     {
         int idx = (int)hits_.size();
         addHit(copyBtn, Action::CopyCommand, cfg.id);
         shell::button(c, copyBtn, T(Str::CopyCommand), shell::ButtonStyle::Subtle,
                       idx == hoverIndex_, idx == pressIndex_, false, shell::glyphs::kCopy);
     }
+
+    Rect cmdText{cmdCard.x + theme::M.px(16), cmdCard.y + theme::M.px(44), textOuterW, textH};
+    c.fillRound(cmdText, theme::M.radiusSmall, theme::fieldBack(false));
+    c.text(cmdText.inset(theme::M.px(8)), cmd, theme::TextSecondary, theme::fontMono(),
+           DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
 
     y = cmdCard.bottom() + theme::M.gapLarge;
 
@@ -639,10 +688,21 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     int port = store::configPort(cfg);
     std::wstring info = util::format(L"%s %d    %s %s", T(Str::Port), port, T(Str::Uptime),
                                      util::formatDuration(uptime).c_str());
-    Rect infoRect{header.right() - theme::M.px(300), header.y + theme::M.px(16),
+    Rect infoRect{header.right() - theme::M.px(310), header.y + theme::M.px(16),
                   theme::M.px(180), theme::M.px(20)};
     c.text(infoRect, info, theme::TextTertiary, theme::fontCaption(),
            DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    // Minimize: shrink the monitor to the corner ball (see paintContent), so
+    // the live view does not have to own the screen while the server runs.
+    Rect minBtn{header.right() - theme::M.px(18) - theme::M.px(34), header.y + theme::M.px(14),
+                theme::M.px(34), theme::M.px(34)};
+    {
+        int idx = (int)hits_.size();
+        addHit(minBtn, Action::MinimizeMonitor);
+        shell::iconButton(c, minBtn, shell::glyphs::kChevronDown, idx == hoverIndex_,
+                          idx == pressIndex_, false);
+    }
 
     // ---- actions ----
     int bh = theme::M.px(34);

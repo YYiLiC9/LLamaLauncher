@@ -6,9 +6,14 @@
 // clean up afterwards.
 #include <windows.h>
 
+#include <dbghelp.h>
 #include <objbase.h>
 
+#include <string>
+
 #include "app.h"
+#include "core/paths.h"
+#include "core/util.h"
 #include "ui/theme.h"
 
 namespace {
@@ -27,9 +32,30 @@ bool claimSingleInstance() {
     return false;
 }
 
+// Writes a minidump into logs\crash so a user-reported crash can be analysed
+// after the fact. Returns only EXCEPTION_CONTINUE_SEARCH, i.e. normal WER
+// behaviour carries on afterwards; the handler just collects the evidence.
+LONG WINAPI crashDumpHandler(EXCEPTION_POINTERS* info) {
+    std::wstring dir = util::joinPath(paths::logDir(), L"crash");
+    util::ensureDir(dir);
+    std::wstring file = util::joinPath(
+        dir, util::format(L"crash_%08lx.dmp", ::GetCurrentProcessId()));
+    HANDLE f = ::CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION mei{::GetCurrentThreadId(), info, FALSE};
+        ::MiniDumpWriteDump(::GetCurrentProcess(), ::GetCurrentProcessId(), f, MiniDumpNormal,
+                            info ? &mei : nullptr, nullptr, nullptr);
+        ::CloseHandle(f);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
+    ::SetUnhandledExceptionFilter(crashDumpHandler);
+
     if (!claimSingleInstance()) return 0;
 
     // Per-monitor DPI awareness is declared in the manifest; this is the belt

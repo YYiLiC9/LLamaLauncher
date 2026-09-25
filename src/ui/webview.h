@@ -65,6 +65,7 @@ private:
     void onHostMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& out);
     void applyBounds();
     void settings();
+    void completeInit();
     void notifyOwner();
 
     static LRESULT CALLBACK HostProc(HWND, UINT, WPARAM, LPARAM);

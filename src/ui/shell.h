@@ -131,6 +131,8 @@ constexpr wchar_t kLog      = L'\xE9D9';
 constexpr wchar_t kChip     = L'\xE950';
 constexpr wchar_t kMemoryStick = L'\xEEA0';
 constexpr wchar_t kGauge    = L'\xE9D2';
+constexpr wchar_t kMinimize = L'\xE921';   // ChromeMinimize (a single dash)
+constexpr wchar_t kChevronDown = L'\xE70D';
 }  // namespace glyphs
 
 // Cached icon font for the Segoe Fluent Icons / MDL2 Assets codepoints above.

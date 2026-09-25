@@ -556,6 +556,17 @@ void App::openChatPage() {
     // The chat page lives inside the app now. The browser pane is created on
     // first use; if the WebView2 runtime is missing the pane says so and the
     // user can still pop the page out into their normal browser.
+    //
+    // Without a running llama-server the pane can only ever show a connection
+    // error, and tearing the pane down while its controller is still spinning
+    // up has proven crash-prone - so the page is simply gated on the server.
+    if (!processAlive()) {
+        toast_ = T(Str::ChatNeedsServer);
+        toastUntil_ = util::nowSeconds() + 4;
+        setView(selected() ? View::Detail : View::Welcome);
+        ::InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
     view_ = View::Chat;
     contentScroll_ = 0;
     syncWebView();
@@ -579,6 +590,14 @@ void App::syncWebView() {
 
     Frame f = currentFrame();
     if (!webView_.host()) {
+        // openChatPage() gates on the server, but the server can die between
+        // that check and the first WM_SIZE here - never spin up a browser for
+        // a port nothing is listening on.
+        if (!processAlive()) {
+            if (HWND h = webView_.host()) ::ShowWindow(h, SW_HIDE);
+            view_ = selected() ? View::Detail : View::Welcome;
+            return;
+        }
         webView_.setNotify(
             [](void* ctx) {
                 ::InvalidateRect(((App*)ctx)->hwnd_, nullptr, FALSE);

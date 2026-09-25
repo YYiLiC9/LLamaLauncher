@@ -193,6 +193,16 @@ void App::dispatch(const Hit& hit) {
             webView_.reload();
             break;
 
+        case Action::MinimizeMonitor:
+            // Shrink the live view to the corner ball; the monitor is simply
+            // "not the active view" while the server runs.
+            setView(selected() ? View::Detail : View::Welcome);
+            break;
+
+        case Action::RestoreMonitor:
+            if (processAlive()) setView(View::Running);
+            break;
+
         case Action::OpenHelp: {
             views::HelpContext ctx;
             ctx.version = L"1.0.0";
@@ -232,6 +242,12 @@ void App::dispatch(const Hit& hit) {
         default:
             break;
     }
+    // Several actions above switch the view without going through setView()
+    // (SelectConfig, NewConfig, Modify, ...). Any of them can leave the chat
+    // view, and the embedded browser is a child window that sits on top of
+    // everything the canvas draws - without this call the "loading chat page"
+    // pane stayed visible over the newly selected view.
+    syncWebView();
     ::InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

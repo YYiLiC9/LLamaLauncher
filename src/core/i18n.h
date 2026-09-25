@@ -153,6 +153,8 @@ enum class Str {
     WebViewLoading,
     WebViewFailed,
     Reload,
+    // The chat page was asked for while no llama-server is running.
+    ChatNeedsServer,
     // Read-only strip showing the command the launch would run.
     CommandPreview,
     // Rejected when the user picks a name a configuration already uses.
