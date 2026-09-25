@@ -68,8 +68,10 @@ private:
     std::vector<Node> seq_;
 };
 
-// Parses `text`. Returns false and fills `error` when the document cannot be
-// understood.
+// Parses `text` into `out`. The parser is deliberately lenient: it always
+// returns true, and a malformed document yields a best-effort tree (whatever
+// could be understood) rather than an error. `error` is kept for API
+// compatibility and is always empty - do not branch on the return value.
 bool parse(const std::wstring& text, Node& out, std::wstring& error);
 
 // Serialises a node tree using canonical 2-space indentation.

@@ -222,6 +222,49 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ::InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
+        case WM_CONTEXTMENU:
+            // Right-click on a configuration entry: quick start / modify /
+            // delete without walking into the detail page first.
+            if ((HWND)wp == hwnd) {
+                POINT pt{(short)LOWORD(lp), (short)HIWORD(lp)};
+                POINT client = pt;
+                bool keyboard = (pt.x == -1 && pt.y == -1);
+                if (keyboard) {
+                    if (!::GetCursorPos(&pt)) return 0;
+                    client = pt;
+                    ::ScreenToClient(hwnd, &client);
+                } else {
+                    ::ScreenToClient(hwnd, &client);
+                }
+
+                Frame f = self->currentFrame();
+                if (!f.list.contains(client.x, client.y)) return 0;
+                int idx = self->configItemAt(f.list, client);
+                if (idx < 0) return 0;
+                const store::Config* cfg = self->filteredConfigs()[(size_t)idx];
+                if (!cfg) return 0;
+
+                HMENU menu = ::CreatePopupMenu();
+                ::AppendMenuW(menu, MF_STRING, 1, T(Str::Start));
+                ::AppendMenuW(menu, MF_STRING, 2, T(Str::Modify));
+                ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                ::AppendMenuW(menu, MF_STRING, 3, T(Str::Delete));
+                int cmd = ::TrackPopupMenu(menu,
+                                           TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                           pt.x, pt.y, 0, hwnd, nullptr);
+                ::DestroyMenu(menu);
+
+                Action action = cmd == 1   ? Action::Start
+                                : cmd == 2 ? Action::Modify
+                                : cmd == 3 ? Action::Delete
+                                           : Action::None;
+                if (action != Action::None) {
+                    self->dispatch(Hit{shell::Rect{}, action, cfg->id, true});
+                }
+                return 0;
+            }
+            break;
+
         case WM_DPICHANGED: {
             theme::onDpiChanged(HIWORD(wp));
             auto* suggested = (RECT*)lp;
@@ -229,6 +272,9 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                            suggested->right - suggested->left, suggested->bottom - suggested->top,
                            SWP_NOZORDER | SWP_NOACTIVATE);
             self->placeSearchEdit();
+            // theme::onDpiChanged rebuilt the font handles; the search box was
+            // created with the old one and would render with a stale HFONT.
+            ::SendMessageW(self->searchEdit_, WM_SETFONT, (WPARAM)theme::fontBody(), TRUE);
             ::InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -435,6 +481,20 @@ std::vector<const store::Config*> App::filteredConfigs() const {
     return out;
 }
 
+int App::configItemAt(const shell::Rect& listArea, POINT clientPt) const {
+    // Same row arithmetic paintSidebar uses, so the menu always targets the
+    // entry under the pointer.
+    auto list = filteredConfigs();
+    int rowH = theme::M.px(58);
+    int gap = theme::M.px(3);
+    int rel = clientPt.y - listArea.y + sidebarScroll_;
+    if (rel < 0) return -1;
+    int idx = rel / (rowH + gap);
+    int within = rel - idx * (rowH + gap);
+    if (idx >= (int)list.size() || within > rowH) return -1;
+    return idx;
+}
+
 // ------------------------------------------------------------------- actions --
 bool App::startConfig(const std::wstring& id) {
     const store::Config* cfg = store_.find(id);
@@ -456,8 +516,15 @@ bool App::startConfig(const std::wstring& id) {
     std::wstring error;
     if (!server_.start(exe, args, store_.effectiveLlamaDir(), logPath, error)) {
         views::message(hwnd_, T(Str::ServerFailed), error);
+        // Keep externalPid_ here: a llama-server that was already running
+        // before we tried (and failed) must stay visible to the timer and to
+        // 停止服务 - clearing the pid orphaned it from the UI.
+        ::InvalidateRect(hwnd_, nullptr, FALSE);
         return false;
     }
+    // Our own server is tracked by Server; only now is the adopted external
+    // pid irrelevant.
+    externalPid_ = 0;
 
     logTail_.clear();
     runStarted_ = util::nowSeconds();
@@ -470,7 +537,17 @@ bool App::startConfig(const std::wstring& id) {
 
 void App::stopServer() {
     server_.stop();
-    externalPid_ = 0;
+    // A llama-server the app did not start itself is not tracked by Server:
+    // without an explicit terminate, "停止服务" only cleared the UI while the
+    // process kept the port. Terminate and wait so the port is really free.
+    if (externalPid_ != 0) {
+        if (HANDLE p = ::OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, externalPid_)) {
+            ::TerminateProcess(p, 0);
+            ::WaitForSingleObject(p, 5000);
+            ::CloseHandle(p);
+        }
+        externalPid_ = 0;
+    }
     logTail_.clear();
     ::InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -551,6 +628,7 @@ void App::copyCommandToClipboard() {
     const store::Config* cfg = selected();
     if (!cfg) return;
     std::wstring cmd = store::buildDisplayCommand(*cfg, store_.serverExe());
+    bool copied = false;
     if (::OpenClipboard(hwnd_)) {
         ::EmptyClipboard();
         size_t bytes = (cmd.size() + 1) * sizeof(wchar_t);
@@ -559,13 +637,21 @@ void App::copyCommandToClipboard() {
             if (void* dst = ::GlobalLock(mem)) {
                 memcpy(dst, cmd.c_str(), bytes);
                 ::GlobalUnlock(mem);
-                ::SetClipboardData(CF_UNICODETEXT, mem);
+                // Ownership passes to the clipboard on success; on failure the
+                // allocation is ours to release.
+                copied = ::SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+                if (!copied) ::GlobalFree(mem);
+            } else {
+                ::GlobalFree(mem);
             }
         }
         ::CloseClipboard();
     }
-    toast_ = T(Str::Copied);
-    toastUntil_ = util::nowSeconds() + 2;
+    // Only claim success when the data really landed on the clipboard.
+    if (copied) {
+        toast_ = T(Str::Copied);
+        toastUntil_ = util::nowSeconds() + 2;
+    }
     ::InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

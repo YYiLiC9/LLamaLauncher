@@ -151,7 +151,9 @@ bool WebView::create(HWND parent, const std::wstring& userDataDir, const std::ws
                     return S_OK;
                 }
                 wvLog(L"environment created");
-                env->AddRef();
+                // The callback hands us a reference we own; storing it as-is
+                // (no extra AddRef) keeps the reference count balanced with
+                // destroy()'s single Release.
                 environment_ = env;
 
                 return env->CreateCoreWebView2Controller(
@@ -167,7 +169,6 @@ bool WebView::create(HWND parent, const std::wstring& userDataDir, const std::ws
                                 return S_OK;
                             }
                             wvLog(L"controller created");
-                            controller->AddRef();
                             controller_ = controller;
                             controller->get_CoreWebView2((ICoreWebView2**)&core_);
 

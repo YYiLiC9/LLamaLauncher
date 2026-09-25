@@ -388,7 +388,7 @@ void toolbarButton(Canvas& c, const Rect& r, wchar_t glyph, const std::wstring& 
     Rect gr{r.x, top, r.w, iconSize};
     c.glyph(gr, glyph, selected ? theme::Accent : theme::TextPrimary, 17);
     Rect cap{r.x, gr.bottom() + gap, r.w, capH};
-    c.text(cap, util::ellipsize(c.dc(), caption, cap.w), theme::TextSecondary, theme::fontCaption(),
+    c.text(cap, util::ellipsize(c.dc(), caption, cap.w, theme::fontCaption()), theme::TextSecondary, theme::fontCaption(),
            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
@@ -418,14 +418,14 @@ void divider(Canvas& c, int x1, int y, int x2, COLORREF color) {
 void chip(Canvas& c, const Rect& r, const std::wstring& text, COLORREF bg, COLORREF fg) {
     c.fillRound(r, r.h / 2, bg);
     Rect tr = r.inset(theme::M.px(8), 0);
-    c.text(tr, util::ellipsize(c.dc(), text, tr.w), fg, theme::fontCaption(),
+    c.text(tr, util::ellipsize(c.dc(), text, tr.w, theme::fontCaption()), fg, theme::fontCaption(),
            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
 void badge(Canvas& c, const Rect& r, const std::wstring& text, COLORREF bg, COLORREF fg) {
     c.fillRound(r, theme::M.radiusSmall, bg);
     Rect tr = r.inset(theme::M.px(6), 0);
-    c.text(tr, util::ellipsize(c.dc(), text, tr.w), fg, theme::fontCaption(),
+    c.text(tr, util::ellipsize(c.dc(), text, tr.w, theme::fontCaption()), fg, theme::fontCaption(),
            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
@@ -460,7 +460,7 @@ void metricTile(Canvas& c, const Rect& r, const std::wstring& label, const std::
         c.text(lr, label, theme::TextSecondary, theme::fontBody(),
                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         Rect sr{textLeft, lr.bottom() + theme::M.px(2), textWidth, theme::M.px(18)};
-        c.text(sr, util::ellipsize(c.dc(), secondary, sr.w), theme::TextTertiary,
+        c.text(sr, util::ellipsize(c.dc(), secondary, sr.w, theme::fontCaption()), theme::TextTertiary,
                theme::fontCaption(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 }
@@ -486,7 +486,7 @@ void meterRow(Canvas& c, const Rect& r, const std::wstring& label, const std::ws
     }
 
     Rect vr{r.right() - valueW, r.y, valueW, r.h};
-    c.text(vr, util::ellipsize(c.dc(), value, vr.w), theme::TextPrimary, theme::fontBody(),
+    c.text(vr, util::ellipsize(c.dc(), value, vr.w, theme::fontBody()), theme::TextPrimary, theme::fontBody(),
            DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 

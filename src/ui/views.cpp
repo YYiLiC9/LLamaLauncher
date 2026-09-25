@@ -47,6 +47,9 @@ HWND makeEdit(HWND parent, HFONT font, bool multiline = false, bool centered = f
     ::SendMessageW(h, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                    MAKELPARAM(theme::M.px(7), theme::M.px(7)));
     if (multiline) ::SendMessageW(h, EM_SETLIMITTEXT, 8000, 0);
+    // Register for DPI refonting: theme rebuilds its font handles when the
+    // monitor changes, and a stale HFONT in an EDIT is undefined behaviour.
+    ui::trackEditFont(h, font == theme::fontMono());
     return h;
 }
 
@@ -1070,12 +1073,39 @@ protected:
 
     void onMouseMove(int x, int y) override {
         int r = rowAt(y);
-        if (r != hoverRow_ || x != hoverX_ || y != hoverY_) {
+        // The tooltip belongs to the flag column only. Over the value box the
+        // popup used to freeze in place (the EDIT below it swallows the mouse
+        // moves), which read as constant flicker while crossing the row.
+        bool overFlag = false;
+        if (r >= 0) {
+            Rect rows = rowsRect();
+            int top = rows.y - scroll_;
+            for (size_t i = 0; i < rows_.size() && i <= (size_t)r; ++i) {
+                if (!(i < visible_.size() && visible_[i])) continue;
+                if (i == (size_t)r) {
+                    Rect rowRect{rows.x, top, rows.w, rowH()};
+                    bool hasBrowse = rows_[i].spec &&
+                                     (rows_[i].spec->valueIsFile || rows_[i].spec->valueIsDir);
+                    overFlag = x <= rowCells(rowRect, rows_[i].custom, hasBrowse).flag.right();
+                    break;
+                }
+                top += rowH();
+            }
+        }
+        if (!overFlag) r = -1;
+        if (r != hoverRow_) {
             hoverRow_ = r;
+            updateTip();
+        } else if (r >= 0 && (x != hoverX_ || y != hoverY_)) {
             hoverX_ = x;
             hoverY_ = y;
             updateTip();
         }
+    }
+
+    void onMouseLeave() override {
+        hoverRow_ = -1;
+        hideTip();
     }
 
     // Creates the tip window once, after the editors exist so it sits above
@@ -1787,6 +1817,7 @@ private:
                 p.flag = flag;
                 p.value = value;
                 p.group = r.group.empty() ? L"custom" : r.group;
+                p.desc = r.desc;
                 p.custom = true;
                 p.enabled = r.enabled;
                 params.push_back(std::move(p));
@@ -1865,10 +1896,10 @@ bool paramEditorDialog(HWND owner, store::Store& store, store::Config& config, b
 // ============================================================================
 namespace {
 
+// 96-dpi design units; ImportExportDialog scales them through theme::M.px()
+// exactly like kRowH elsewhere. Raw values left every row at 57% size on a
+// 175% display.
 constexpr int kImportRowH = 40;
-// Width of the "select all" button in the list header, and of the id column
-// pinned to the right of every row. Both are reserved up front so the text next
-// to them can be clipped instead of running underneath.
 constexpr int kSelectAllW = 96;
 constexpr int kIdColW = 96;
 
@@ -1899,6 +1930,20 @@ protected:
                     clientRect().h - top - footerH()};
     }
 
+    // Scaled accessors - the constants are 96-dpi design units.
+    int importRowH() const { return theme::M.px(kImportRowH); }
+    int selectAllW() const { return theme::M.px(kSelectAllW); }
+    int idColW() const { return theme::M.px(kIdColW); }
+
+    void onMouseWheel(int delta, int, int) override {
+        const auto& configs = store_.configs();
+        Rect list = listRect();
+        int contentH = (int)configs.size() * importRowH();
+        int maxScroll = std::max(0, contentH - (list.h - theme::M.px(40)));
+        importScroll_ = std::clamp(importScroll_ - delta / WHEEL_DELTA * importRowH(), 0, maxScroll);
+        invalidate();
+    }
+
     void onPaint(Canvas& c, const Rect& client) override {
         Rect header{0, 0, client.w, theme::M.px(56)};
         c.fill(header, theme::LayerBg);
@@ -1926,7 +1971,7 @@ protected:
         // is clipped to the gap so the two can never run into each other.
         Rect listHead{list.x + theme::M.px(14), list.y + theme::M.px(10), list.w - theme::M.px(28),
                       theme::M.px(22)};
-        Rect allBtn{listHead.right() - kSelectAllW, listHead.y + theme::M.px(1), kSelectAllW,
+        Rect allBtn{listHead.right() - selectAllW(), listHead.y + theme::M.px(1), selectAllW(),
                     theme::M.px(20)};
         Rect listTitle{listHead.x, listHead.y, allBtn.x - listHead.x - theme::M.px(10),
                        listHead.h};
@@ -1938,12 +1983,13 @@ protected:
 
         // ---- rows ----
         const auto& configs = store_.configs();
-        int y = listHead.bottom() + theme::M.px(6);
+        int y = listHead.bottom() + theme::M.px(6) - importScroll_;
         HRGN clip = ::CreateRectRgn(list.left(), y, list.right(), list.bottom() - theme::M.px(8));
         ::SelectClipRgn(c.dc(), clip);
         for (size_t i = 0; i < configs.size(); ++i) {
-            Rect row{list.x + theme::M.px(8), y, list.w - theme::M.px(16), kImportRowH};
-            y += kImportRowH;
+            Rect row{list.x + theme::M.px(8), y, list.w - theme::M.px(16), importRowH()};
+            y += importRowH();
+            if (row.bottom() < list.top()) continue;   // scrolled out above
             if (row.top() > list.bottom()) break;
 
             int id = ID_EXPORT_ROW_FIRST + (int)i;
@@ -1964,10 +2010,10 @@ protected:
             }
 
             // The id is pinned to the right; the name takes whatever is left.
-            Rect meta{row.right() - theme::M.px(10) - kIdColW, row.y, kIdColW, row.h};
+            Rect meta{row.right() - theme::M.px(10) - idColW(), row.y, idColW(), row.h};
             int nameX = box.right() + theme::M.px(10);
             Rect name{nameX, row.y, meta.x - nameX - theme::M.px(10), row.h};
-            c.text(name, util::ellipsize(c.dc(), configs[i].name, name.w), theme::TextPrimary,
+            c.text(name, util::ellipsize(c.dc(), configs[i].name, name.w, theme::fontBody()), theme::TextPrimary,
                    theme::fontBody(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
             c.text(meta, configs[i].id, theme::TextTertiary, theme::fontCaption(),
                    DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -2124,6 +2170,7 @@ protected:
 private:
     store::Store& store_;
     std::vector<bool> selected_;
+    int importScroll_ = 0;
     std::vector<std::wstring> importedIds_;
     std::wstring status_;
     bool statusOk_ = false;
@@ -2305,7 +2352,7 @@ protected:
             else if (util::contains(low, L"warn")) col = theme::Warning;
             else if (util::contains(low, L"listening") || util::contains(low, L"server is"))
                 col = theme::Success;
-            c.text(lr, util::ellipsize(c.dc(), lines_[i], lr.w), col, theme::fontMono(),
+            c.text(lr, util::ellipsize(c.dc(), lines_[i], lr.w, theme::fontMono()), col, theme::fontMono(),
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         }
         if (lines_.empty()) {

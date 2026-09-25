@@ -63,6 +63,10 @@ public:
     Settings& settings() { return settings_; }
     const Settings& settings() const { return settings_; }
 
+    // Mutable on purpose, but note: upsert()/remove()/importConfig() rebuild
+    // the vector internally (loadConfigs), so EVERY reference or pointer handed
+    // out by configs()/find() is invalidated across those calls. Copy what you
+    // need before calling them.
     std::vector<Config>& configs() { return configs_; }
     const std::vector<Config>& configs() const { return configs_; }
 

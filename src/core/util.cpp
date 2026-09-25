@@ -120,6 +120,13 @@ std::wstring format(const wchar_t* fmt, ...) {
     return {};
 }
 
+std::wstring ellipsize(HDC dc, const std::wstring& s, int maxPx, HFONT font) {
+    HGDIOBJ oldFont = ::SelectObject(dc, font);
+    std::wstring out = ellipsize(dc, s, maxPx);
+    ::SelectObject(dc, oldFont);
+    return out;
+}
+
 std::wstring ellipsize(HDC dc, const std::wstring& s, int maxPx) {
     SIZE sz{};
     if (!dc || maxPx <= 0) return s;
@@ -218,7 +225,10 @@ std::vector<std::wstring> listDirs(const std::wstring& dir) {
 }
 
 std::wstring readTextFile(const std::wstring& path) {
-    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    // Share write access too: another process (or a sync client) holding the
+    // file for writing should not make us read a truncated view silently.
+    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                              FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return {};
     LARGE_INTEGER size{};
@@ -226,9 +236,14 @@ std::wstring readTextFile(const std::wstring& path) {
     std::string data;
     data.resize((size_t)size.QuadPart);
     DWORD read = 0;
+    // A failed read is not "an empty file": returning {} here would make the
+    // configuration vanish from the list with no hint anything went wrong, so
+    // the result is checked and a short read is reported by resizes below.
+    BOOL ok = TRUE;
     if (!data.empty())
-        ::ReadFile(f, data.data(), (DWORD)data.size(), &read, nullptr);
+        ok = ::ReadFile(f, data.data(), (DWORD)data.size(), &read, nullptr) != 0;
     ::CloseHandle(f);
+    if (!ok) return {};
     data.resize(read);
 
     // Strip a UTF-8 BOM when present, otherwise assume UTF-8.

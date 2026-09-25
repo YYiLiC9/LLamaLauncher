@@ -233,14 +233,14 @@ void App::paintSidebar(Canvas& c, const Frame& f) {
         int textX = tile.right() + theme::M.px(10);
         int textW = row.right() - theme::M.px(10) - textX;
         Rect name{textX, row.y + theme::M.px(9), textW, theme::M.px(20)};
-        c.text(name, util::ellipsize(c.dc(), cfg->name, name.w),
+        c.text(name, util::ellipsize(c.dc(), cfg->name, name.w, theme::fontBodyBold()),
                selected ? theme::TextPrimary : theme::TextPrimary, theme::fontBodyBold(),
                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
         Rect sub{textX, name.bottom(), textW, theme::M.px(18)};
         std::wstring model = util::fileName(cfg->modelFile());
         if (model.empty()) model = cfg->id;
-        c.text(sub, util::ellipsize(c.dc(), model, sub.w), theme::TextTertiary,
+        c.text(sub, util::ellipsize(c.dc(), model, sub.w, theme::fontCaption()), theme::TextTertiary,
                theme::fontCaption(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
@@ -386,7 +386,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     Rect name{tile.right() + theme::M.px(14), header.y + theme::M.px(18),
               header.w - tile.w - theme::M.px(180), theme::M.px(26)};
-    c.text(name, util::ellipsize(c.dc(), cfg.name, name.w), theme::TextPrimary,
+    c.text(name, util::ellipsize(c.dc(), cfg.name, name.w, theme::fontTitle()), theme::TextPrimary,
            theme::fontTitle(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     Rect meta{name.x, name.bottom() + theme::M.px(2), name.w, theme::M.px(20)};
@@ -395,7 +395,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
     metaText += util::format(L"   ·   %s %d   ·   %s %d", T(Str::MetricThreads),
                              cfg.intValue(L"-t", 0), T(Str::MetricGpu),
                              cfg.intValue(L"-ngl", 0));
-    c.text(meta, util::ellipsize(c.dc(), metaText, meta.w), theme::TextTertiary,
+    c.text(meta, util::ellipsize(c.dc(), metaText, meta.w, theme::fontCaption()), theme::TextTertiary,
            theme::fontCaption(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // Status chip: running or idle.
@@ -534,7 +534,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
             // Left column: the flag, rendered in the mono face so it reads as
             // literal command-line text.
             Rect flagRect{row.x + theme::M.px(18), row.y, theme::M.px(196), row.h};
-            c.text(flagRect, util::ellipsize(c.dc(), store::flagLabel(p->flag), flagRect.w),
+            c.text(flagRect, util::ellipsize(c.dc(), store::flagLabel(p->flag), flagRect.w, theme::fontMono()),
                    theme::TextPrimary, theme::fontMono(),
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
@@ -552,7 +552,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
             } else if (!util::trim(p->value).empty()) {
                 bool isPath = spec && (spec->valueIsFile || spec->valueIsDir);
                 c.text(valueRect,
-                       util::ellipsize(c.dc(), p->value, valueRect.w),
+                       util::ellipsize(c.dc(), p->value, valueRect.w, theme::fontMono()),
                        isPath ? theme::TextSecondary : theme::TextPrimary, theme::fontMono(),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
             } else {
@@ -612,7 +612,7 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     Rect title{tile.right() + theme::M.px(14), header.y + theme::M.px(18),
                header.w - tile.w - theme::M.px(330), theme::M.px(24)};
-    c.text(title, util::ellipsize(c.dc(), cfg.name, title.w), theme::TextPrimary,
+    c.text(title, util::ellipsize(c.dc(), cfg.name, title.w, theme::fontSubtitleBold()), theme::TextPrimary,
            theme::fontSubtitleBold(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     Rect state{title.x, title.bottom() + theme::M.px(2), title.w, theme::M.px(20)};
@@ -632,7 +632,7 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     c.circle(state.x + theme::M.px(4), state.y + theme::M.px(10), theme::M.px(3),
              running ? (ready ? theme::Success : theme::Warning) : theme::TextTertiary);
     c.text(Rect{state.x + theme::M.px(12), state.y, state.w, state.h},
-           util::ellipsize(c.dc(), stateText, state.w), stateColor, theme::fontCaption(),
+           util::ellipsize(c.dc(), stateText, state.w, theme::fontCaption()), stateColor, theme::fontCaption(),
            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // port + uptime chips
@@ -824,7 +824,7 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         std::wstring line = logTail_[i];
         // Strip the leading timestamp the reader thread may have added so the
         // tail stays readable in the narrow column.
-        c.text(lr, util::ellipsize(c.dc(), line, lr.w), theme::TextSecondary, theme::fontMono(),
+        c.text(lr, util::ellipsize(c.dc(), line, lr.w, theme::fontMono()), theme::TextSecondary, theme::fontMono(),
                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     if (total == 0) {
@@ -936,7 +936,7 @@ void App::paintBottomBar(Canvas& c, const Frame& f) {
         leftColor = theme::Warning;
     } else {
         left = util::format(L"%s  ·  %s", T(Str::StatusLlamaReady),
-                            util::ellipsize(c.dc(), store_.effectiveLlamaDir(), theme::M.px(320))
+                            util::ellipsize(c.dc(), store_.effectiveLlamaDir(), theme::M.px(320), theme::fontCaption())
                                 .c_str());
     }
 

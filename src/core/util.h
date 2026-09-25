@@ -28,6 +28,10 @@ std::wstring replaceAll(std::wstring s, const std::wstring& from, const std::wst
 std::wstring format(const wchar_t* fmt, ...);
 // Truncates to `maxPx` pixels using the given DC font, appending an ellipsis.
 std::wstring ellipsize(HDC dc, const std::wstring& s, int maxPx);
+// Same, but measures with an explicit font. GDI measures against whatever is
+// currently selected in the DC, so call this (or select the font yourself)
+// wherever the drawing font differs from what happens to be in the DC.
+std::wstring ellipsize(HDC dc, const std::wstring& s, int maxPx, HFONT font);
 
 // ------------------------------------------------------------------- files --
 bool fileExists(const std::wstring& path);

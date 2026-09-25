@@ -353,18 +353,28 @@ void init(HWND hwnd) {
 
 void onDpiChanged(UINT dpi) {
     if (dpi < 72) dpi = 96;
+    // Keep the DPI the caller measured: init(nullptr) would silently override
+    // it with GetDpiForSystem, which put a secondary monitor back on the primary
+    // monitor's scale.
     M.dpi = (int)dpi;
     applyMetrics();
 
     for (auto& [_, f] : g_cache) ::DeleteObject(f);
     g_cache.clear();
-    HFONT all[] = {g_body, g_bodyBold, g_small, g_caption, g_subtitle,
-                   g_subtitleBold, g_title, g_heading, g_mono};
-    g_body = g_bodyBold = g_small = g_caption = g_subtitle = g_subtitleBold = g_title = g_heading =
-        g_mono = nullptr;
-    for (HFONT f : all) ::DeleteObject(f);
-
-    init(nullptr);
+    // Deliberately NOT deleting the nine shared fonts: child EDIT controls
+    // (search box, parameter editors) still hold the old handles, and using a
+    // deleted HFONT is undefined behaviour. The orphaned fonts are a few
+    // hundred bytes each and DPI changes are rare; they die with the process.
+    g_body = makeFont(M.fontBody, false, uiFace());
+    g_bodyBold = makeFont(M.fontBody, true, uiFace());
+    g_small = makeFont(M.fontSmall, false, uiFace());
+    g_caption = makeFont(M.fontCaption, false, uiFace());
+    g_subtitle = makeFont(M.fontSubtitle, false, uiFace());
+    g_subtitleBold = makeFont(M.fontSubtitle, true, uiFace());
+    g_title = makeFont(M.fontTitle, true, uiFace());
+    g_heading = makeFont(M.fontHeading, true, uiFace());
+    g_mono = makeFont(M.fontMono, false, monoFace());
+    refreshSystemTheme();
 }
 
 HFONT fontBody() { return g_body; }

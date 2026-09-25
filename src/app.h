@@ -124,6 +124,8 @@ private:
     // ------------------------------------------------------------------ input
     void onMouseMove(int x, int y);
     void onMouseLeave();
+    // Sidebar entry under the client point, or -1. Used by the right-click menu.
+    int configItemAt(const shell::Rect& listArea, POINT clientPt) const;
     void onLButtonDown(int x, int y);
     void onLButtonUp(int x, int y);
     void onMouseWheel(int delta, int x, int y);

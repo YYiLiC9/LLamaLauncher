@@ -21,6 +21,13 @@ using shell::Rect;
 
 enum class DialogResult { None, Ok, Cancel, Custom1, Custom2 };
 
+// Child-EDIT font registry. theme::onDpiChanged rebuilds its font handles, so
+// every EDIT created through makeEdit() is tracked here and re-sent the
+// current-scaled font when the dialog handling WM_DPICHANGED asks for it.
+void trackEditFont(HWND edit, bool mono);
+// Re-sends the right font to the tracked EDITs that live under `dialog`.
+void refontTrackedEdits(HWND dialog);
+
 class Dialog {
 public:
     virtual ~Dialog();
@@ -44,6 +51,8 @@ protected:
     virtual void onMouseWheel(int delta, int x, int y) {
         (void)delta; (void)x; (void)y;
     }
+    // The pointer left the dialog (TrackMouseEvent delivers WM_MOUSELEAVE).
+    virtual void onMouseLeave() {}
     virtual bool onKeyDown(WPARAM key) { (void)key; return false; }
     // Fired once, after a press-and-release on the same region. This is where
     // click behaviour belongs; the mouse handlers above are for tracking state.

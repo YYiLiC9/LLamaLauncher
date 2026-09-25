@@ -100,11 +100,15 @@ bool Dialog::run(HWND owner, const std::wstring& title, int width, int height, b
     // theme even though the flag had been set.
     theme::applyCaptionTheme(hwnd_);
 
-    // Modal loop: pump until the dialog closes. Using PeekMessage here (rather
-    // than GetMessage) matters because the DPI change and paint messages for the
-    // owner window still need to be processed while the dialog is up.
+    // Modal loop: pump until the dialog closes. The DPI change and paint
+    // messages for the owner window still need to be processed while the
+    // dialog is up.
+    // GetMessageW returns -1 on error (which is truthy): a plain `while`
+    // would never notice and spin forever, so the loop tests > 0.
     MSG msg{};
-    while (::IsWindow(hwnd_) && ::GetMessageW(&msg, nullptr, 0, 0)) {
+    while (::IsWindow(hwnd_)) {
+        BOOL got = ::GetMessageW(&msg, nullptr, 0, 0);
+        if (got <= 0) break;
         if (msg.hwnd == hwnd_ || ::IsChild(hwnd_, msg.hwnd)) {
             if (!::IsDialogMessageW(hwnd_, &msg)) {
                 ::TranslateMessage(&msg);
@@ -230,6 +234,7 @@ LRESULT CALLBACK Dialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_MOUSELEAVE:
             self->tracking_ = false;
             self->hoverId_ = -1;
+            self->onMouseLeave();
             self->invalidate();
             return 0;
 
@@ -278,6 +283,15 @@ LRESULT CALLBACK Dialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (self->onKeyDown(wp)) return 0;
             break;
 
+        case WM_DPICHANGED:
+            // Reposition the child editors and hand them the rebuilt fonts.
+            // Without this a dialog dragged to another monitor kept its old
+            // layout and the stale HFONT handles its EDITs were created with.
+            self->onLayout();
+            refontTrackedEdits(hwnd);
+            ::InvalidateRect(hwnd, nullptr, TRUE);
+            return 0;
+
         case WM_CLOSE:
             self->close(DialogResult::Cancel);
             return 0;
@@ -289,8 +303,38 @@ LRESULT CALLBACK Dialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-void Dialog::repaintForTheme() {
-    // The caption is DWM-drawn, so a plain redraw leaves it light while the
+// ---- child EDIT font registry (see dialog.h) ----
+namespace {
+
+struct FontBind {
+    HWND hwnd;
+    bool mono;
+};
+std::vector<FontBind>& fontBinds() {
+    static std::vector<FontBind> binds;
+    return binds;
+}
+
+}  // namespace
+
+void trackEditFont(HWND edit, bool mono) {
+    fontBinds().push_back({edit, mono});
+    // Prune entries whose dialog is long gone; the vector is tiny either way.
+    auto& binds = fontBinds();
+    binds.erase(std::remove_if(binds.begin(), binds.end(),
+                               [](const FontBind& b) { return !::IsWindow(b.hwnd); }),
+                binds.end());
+}
+
+void refontTrackedEdits(HWND dialog) {
+    for (const FontBind& b : fontBinds()) {
+        if (!::IsWindow(b.hwnd) || !::IsChild(dialog, b.hwnd)) continue;
+        HFONT f = b.mono ? theme::fontMono() : theme::fontBody();
+        ::SendMessageW(b.hwnd, WM_SETFONT, (WPARAM)f, TRUE);
+    }
+}
+
+void Dialog::repaintForTheme() {    // The caption is DWM-drawn, so a plain redraw leaves it light while the
     // client goes dark. Re-send the immersive-dark flag for this window as well
     // as for the one behind it.
     theme::applyCaptionTheme(hwnd_);
