@@ -143,7 +143,8 @@ bool Store::loadConfigs() {
             p.value = spec ? (spec->defaultVal ? spec->defaultVal : L"") : L"";
             p.group = pv.group;
             p.custom = false;
-            p.enabled = !util::trim(p.value).empty();
+            // Same rule as defaultParams(): -m ships checked.
+            p.enabled = util::iequals(pv.flag, L"-m") ? true : !util::trim(p.value).empty();
             cfg.params.push_back(std::move(p));
         }
 
@@ -519,8 +520,10 @@ std::vector<Param> defaultParams() {
         p.desc = pv.desc;
         p.custom = pv.custom;
         // A row that arrives with a value is on; an empty one starts off,
-        // which is what keeps untouched parameters out of the command.
-        p.enabled = !util::trim(p.value).empty();
+        // which is what keeps untouched parameters out of the command. -m is
+        // the exception: a launch needs a model, and with the row off its
+        // browse button is disabled too, so a fresh config read as broken.
+        p.enabled = util::iequals(pv.flag, L"-m") ? true : !util::trim(p.value).empty();
         out.push_back(std::move(p));
     }
     return out;

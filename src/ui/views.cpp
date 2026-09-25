@@ -842,6 +842,16 @@ public:
                 if (d && *d) r.desc = d;
             }
             r.enabled = enabledFor(pv.flag, r.value);
+            // -m ships checked: every launch needs a model, and with the row
+            // off, its browse button is disabled too, which made a fresh
+            // config look broken. A config that explicitly stores the row
+            // (unchecked) keeps the user's choice.
+            if (pv.flag == L"-m") {
+                bool stored = false;
+                for (const store::Param& p : config.params)
+                    if (p.flag == L"-m") { stored = true; break; }
+                if (!stored) r.enabled = true;
+            }
             rows_.push_back(std::move(r));
         }
         for (const store::Param& p : config.params) {
@@ -880,11 +890,55 @@ protected:
 
     int contentTop() const { return theme::M.px(56) + theme::M.px(72); }
     int footerTop() const { return clientRect().h - theme::M.px(58); }
-    // The scrolling list stops short of the footer to leave room for the
-    // read-only command preview strip. The reservation is generous on purpose:
-    // it has to hold the caption plus a two-line box *and* the gaps around them,
-    // or the box ends up jammed against the footer.
-    int bodyBottom() const { return footerTop() - theme::M.px(96); }
+
+    // Inner text width of the preview box: the rows column minus the box
+    // padding. Declared without rowsRect() because the row list's height
+    // depends on the preview, not the other way round.
+    int previewInnerW() const {
+        int x = groupW() + theme::M.px(24);
+        int w = (int)clientRect().w - x - theme::M.px(16);
+        return std::max(0, w - theme::M.px(20));
+    }
+
+    // Lines the current command needs when wrapped into previewInnerW(). The
+    // face is monospaced, so one width sample is enough. Cached because the
+    // geometry below asks on every query; a negative cache means "measure".
+    int previewLinesNeeded() const {
+        if (previewLines_ < 0) {
+            HDC screen = ::GetDC(nullptr);
+            previewLines_ = countLines(screen);
+            ::ReleaseDC(nullptr, screen);
+        }
+        return previewLines_;
+    }
+    int countLines(HDC dc) const {
+        int maxW = previewInnerW();
+        if (maxW <= 0 || previewText_.empty()) return 1;
+        HGDIOBJ oldFont = ::SelectObject(dc, theme::fontMono());
+        SIZE sz{};
+        ::GetTextExtentPoint32W(dc, L"MM", 2, &sz);
+        ::SelectObject(dc, oldFont);
+        int charW = std::max(1, (int)(sz.cx / 2));
+        int perLine = std::max(1, maxW / charW);
+        return (int)((previewText_.size() + perLine - 1) / perLine);
+    }
+
+    // Height of caption + preview box that must fit between the row list and
+    // the footer. The row list gives way when the command needs more lines,
+    // so the preview never has to cut the command short.
+    int previewBlockH() const {
+        int lineH = theme::lineHeight(theme::fontMono());
+        int n = std::max(1, previewLinesNeeded());
+        // 24: caption band + gap under the rows; 16: box padding; 6: footer gap
+        return theme::M.px(24) + n * lineH + theme::M.px(16) + theme::M.px(6);
+    }
+    int bodyBottom() const {
+        int h = std::max(theme::M.px(96), previewBlockH());
+        // Never squeeze the list below roughly three rows; an extreme command
+        // then overflows the box and the wrap marks the cut with an ellipsis.
+        int maxH = std::max(theme::M.px(96), footerTop() - contentTop() - rowH() * 3);
+        return footerTop() - std::min(h, maxH);
+    }
 
     Rect railRect() const {
         Rect body{0, contentTop(), clientRect().w, bodyBottom() - contentTop()};
@@ -907,14 +961,17 @@ protected:
     }
 
     // The command preview, spanning the rows column just above the footer.
-    // Sized to exactly two lines of the monospaced face plus a little breathing
-    // room, and clamped so it can never poke into the footer on a short window.
+    // Sized to exactly the lines the command needs (see previewBlockH), and
+    // clamped so it can never poke into the footer on a short window.
     Rect previewBox() const {
         Rect rows = rowsRect();
-        int h = theme::lineHeight(theme::fontMono()) * 2 + theme::M.px(16);
+        int lineH = theme::lineHeight(theme::fontMono());
+        int n = std::max(1, previewLinesNeeded());
+        int h = n * lineH + theme::M.px(16);
         int top = bodyBottom() + theme::M.px(24);
-        h = std::min(h, footerTop() - top - theme::M.px(6));
-        return Rect{rows.x, top, rows.w, std::max(h, theme::M.px(24))};
+        int bottom = footerTop() - theme::M.px(6);
+        if (top + h > bottom) h = std::max(theme::M.px(24), bottom - top);
+        return Rect{rows.x, top, rows.w, h};
     }
     Rect previewCaption() const {
         Rect rows = rowsRect();
@@ -954,6 +1011,7 @@ protected:
         std::wstring text = previewCommand();
         if (text == previewText_) return;
         previewText_ = text;
+        previewLines_ = -1;   // the wrap count changed with the text
         invalidate();
     }
 
@@ -962,58 +1020,37 @@ protected:
     }
 
     // Splits `text` into at most `maxLines` lines that fit `maxW` pixels of the
-    // monospaced face, adding an ellipsis when the rest does not fit. Breaking
-    // is done per character: a model path is a single enormous token, so
-    // breaking on spaces alone would leave the strip overflowing.
+    // monospaced face, adding an ellipsis when the rest does not fit. The face
+    // is monospaced, so one width sample serves the whole string: measuring
+    // every prefix character was O(n^2) and visible while typing long paths.
     std::vector<std::wstring> wrapCommand(HDC dc, const std::wstring& text, int maxW,
                                           int maxLines) const {
         std::vector<std::wstring> lines;
         if (maxW <= 0 || maxLines <= 0 || text.empty()) return lines;
 
         HGDIOBJ oldFont = ::SelectObject(dc, theme::fontMono());
-        auto width = [&](const std::wstring& s) {
-            SIZE sz{};
-            ::GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
-            return (int)sz.cx;
-        };
-
-        std::wstring line;
-        size_t consumed = 0;
-        bool dropped = false;
-        for (size_t i = 0; i < text.size(); ++i) {
-            wchar_t ch = text[i];
-            if (ch == L'\n') {
-                lines.push_back(line);
-                line.clear();
-                consumed = i + 1;
-                if ((int)lines.size() >= maxLines) break;
-                continue;
-            }
-            std::wstring next = line + ch;
-            if (width(next) <= maxW || line.empty()) {
-                line = std::move(next);
-                consumed = i + 1;
-                continue;
-            }
-            lines.push_back(line);
-            line.assign(1, ch);
-            consumed = i + 1;
-            if ((int)lines.size() >= maxLines) break;
-        }
-        if (consumed < text.size()) dropped = true;
-        if ((int)lines.size() < maxLines && !line.empty()) {
-            lines.push_back(line);
-            line.clear();
-        }
-
-        // Mark the cut so the user knows the command continues.
-        if (dropped && !lines.empty()) {
-            std::wstring& last = lines.back();
-            const std::wstring kEllipsis = L"\u2026";
-            while (!last.empty() && width(last + kEllipsis) > maxW) last.pop_back();
-            last += kEllipsis;
-        }
+        SIZE sz{};
+        ::GetTextExtentPoint32W(dc, L"MM", 2, &sz);
         ::SelectObject(dc, oldFont);
+        int charW = std::max(1, (int)(sz.cx / 2));
+        int perLine = std::max(1, maxW / charW);
+
+        size_t start = 0;
+        while (start < text.size()) {
+            if ((int)lines.size() >= maxLines) {
+                // Mark the cut so the user knows the command continues.
+                std::wstring& last = lines.back();
+                const std::wstring kEllipsis = L"\u2026";
+                while (!last.empty() &&
+                       (int)((last.size() + kEllipsis.size()) * charW) > maxW)
+                    last.pop_back();
+                last += kEllipsis;
+                return lines;
+            }
+            size_t take = std::min((size_t)perLine, text.size() - start);
+            lines.push_back(text.substr(start, take));
+            start += take;
+        }
         return lines;
     }
 
@@ -1286,8 +1323,10 @@ protected:
             };
 
             // The flag box is only editable on custom rows while they are on.
+            // Centred like the value box: a single-line EDIT pinned to the top
+            // of the cell read as misaligned with the value field beside it.
             bool customEditable = rows_[i].custom && rows_[i].enabled;
-            if (w.flag) place(w.flag, cells.flag, customEditable);
+            if (w.flag) place(w.flag, cells.flag, customEditable, true);
             // A flag-style parameter has nothing to type: its cell shows the
             // description instead (painted in onPaint), so the edit box would
             // only invite typing that can never reach the command line.
@@ -1343,6 +1382,10 @@ protected:
 
     // -------------------------------------------------------------------- paint
     void onPaint(Canvas& c, const Rect& client) override {
+        // Refresh the wrap count before any geometry runs: bodyBottom() carves
+        // room for the preview out of the row list and reads this.
+        previewLines_ = countLines(c.dc());
+
         // Chrome
         Rect header{0, 0, client.w, theme::M.px(56)};
         c.fill(header, theme::LayerBg);
@@ -1359,19 +1402,11 @@ protected:
         Rect nf = nameField();
         c.fillRound(nf, theme::M.radiusSmall, theme::CardBg);
         c.strokeRound(nf, theme::M.radiusSmall, theme::BorderStrong);
-
-        if (nameEdit_) {
-            Rect n = nf.inset(theme::M.px(1));
-            // Keep the child control in step when the window is resized.
-            RECT cur{};
-            ::GetWindowRect(nameEdit_, &cur);
-            POINT tl{cur.left, cur.top};
-            ::ScreenToClient(hwnd(), &tl);
-            if (tl.x != n.x || tl.y != n.y) {
-                ::SetWindowPos(nameEdit_, nullptr, n.x, n.y, n.w, n.h,
-                               SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-        }
+        // The name edit itself is positioned by placeControls() (centred in
+        // this field). It must NOT be re-synced here: paint ran with the same
+        // geometry, and a second SetWindowPos from the paint pass fought the
+        // centred placement, which showed up as the name box twitching on
+        // every scroll step. WM_SIZE already re-runs onLayout -> placeControls.
 
         // ---- body ----
         Rect body{0, contentTop(), client.w, footerTop() - contentTop()};
@@ -1578,8 +1613,7 @@ protected:
             HRGN previewClip =
                 ::CreateRectRgn(inner.left(), inner.top(), inner.right(), inner.bottom());
             ::SelectClipRgn(c.dc(), previewClip);
-            auto cmdLines = wrapCommand(c.dc(), previewText_, inner.w,
-                                        std::min(lines, 3));
+            auto cmdLines = wrapCommand(c.dc(), previewText_, inner.w, lines);
             int ly = inner.y;
             for (size_t i = 0;
                  i < cmdLines.size() && ly + lineH <= inner.bottom() + theme::M.px(2); ++i) {
@@ -1621,7 +1655,11 @@ protected:
         int total = 0;
         for (size_t i = 0; i < rows_.size(); ++i)
             if (i < visible_.size() && visible_[i]) total += rowH();
-        int maxScroll = std::max(0, total - rows.h + theme::M.px(8));
+        // The maximum follows the clip, not the raw height: painting and
+        // editor placement only cover whole rows, so a maximum computed from
+        // rows.h left the last row (typically the freshly added custom one)
+        // permanently half-cut with its editors hidden.
+        int maxScroll = std::max(0, total - rowsClip().h);
         scroll_ -= delta / WHEEL_DELTA * theme::M.px(48);
         scroll_ = std::clamp(scroll_, 0, maxScroll);
         // Both halves have to move together. Repositioning the child editors
@@ -1629,6 +1667,12 @@ protected:
         // drawn at the old offset while the editors slid to the new one.
         placeControls();
         invalidate();
+        // invalidate() only queues a repaint, and WM_PAINT is low priority:
+        // during a fast wheel the editors were already at the new offset while
+        // the canvas still showed the old one, which read as boxes floating
+        // over the wrong rows. UpdateWindow repaints synchronously, so every
+        // scroll step lands fully composed.
+        ::UpdateWindow(hwnd());
     }
 
     void onClick(int id) override {
@@ -1701,6 +1745,8 @@ protected:
             ensureRowWidgets();
             placeControls();
             invalidate();
+            // Same reason as in onMouseWheel: land the reflow fully composed.
+            ::UpdateWindow(hwnd());
             return;
         }
 
@@ -1726,11 +1772,11 @@ protected:
                 ensureRowWidgets();
                 placeControls();
                 // Clamp the scroll to the real maximum.
-                Rect rowsR = rowsRect();
                 int total = 0;
                 for (size_t i = 0; i < rows_.size(); ++i)
                     if (i < visible_.size() && visible_[i]) total += rowH();
-                scroll_ = std::max(0, total - rowsR.h + theme::M.px(8));
+                // Clamp to the real maximum (same whole-row rule as the wheel).
+                scroll_ = std::max(0, total - rowsClip().h);
                 placeControls();
                 // Put the caret in the new flag box with the placeholder
                 // selected, so the first keystroke replaces it.
@@ -1872,6 +1918,9 @@ private:
     HWND nameEdit_ = nullptr;
     // The command shown in the preview strip, refreshed whenever a row changes.
     std::wstring previewText_;
+    // Lines the preview needs when wrapped; cached, negative = re-measure.
+    // mutable because the const geometry helpers fill it in lazily.
+    mutable int previewLines_ = -1;
     // Hover tooltip state: which row the pointer is over and where it is.
     int hoverRow_ = -1;
     int hoverX_ = 0;
