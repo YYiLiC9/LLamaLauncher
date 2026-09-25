@@ -130,9 +130,13 @@ void App::paintSidebar(Canvas& c, const Frame& f) {
         bool hov = idx == hoverIndex_;
         bool pre = idx == pressIndex_;
         Canvas& bc = c;
-        bc.fillRound(newBtn, theme::M.radiusMedium, theme::Accent);
-        if (hov || pre)
-            bc.overlay(newBtn, theme::M.radiusMedium, pre ? theme::PressAlpha : theme::HoverAlpha);
+        // Hover/press tint mirrors what shell::button does for primary-style
+        // buttons (a white blend on the accent). Canvas::overlay used to be
+        // called here, but it was an empty stub - the button had no feedback.
+        bc.fillRound(newBtn, theme::M.radiusMedium,
+                     hov || pre ? theme::blend(theme::Accent, RGB(255, 255, 255),
+                                               pre ? theme::PressAlpha : theme::HoverAlpha)
+                                : theme::Accent);
 
         std::wstring shortLabel = (i18n::current() == Lang::Zh) ? L"新建" : L"New";
         int labelW = bc.textWidth(shortLabel, theme::fontBodyBold());
@@ -449,7 +453,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     Rect cmdText{cmdCard.x + theme::M.px(16), cmdCard.y + theme::M.px(28),
                  cmdCard.w - theme::M.px(32) - theme::M.px(96), theme::M.px(56)};
-    c.fillRound(cmdText, theme::M.radiusSmall, RGB(246, 246, 246));
+    c.fillRound(cmdText, theme::M.radiusSmall, theme::fieldBack(false));
     c.textBlock(cmdText.inset(theme::M.px(8)), store::buildDisplayCommand(cfg, store_.serverExe()),
                 theme::TextSecondary, theme::fontMono(),
                 DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
@@ -737,7 +741,7 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
                DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
         Rect plot{cx, cy, cw, chartH};
-        c.fillRound(plot, theme::M.radiusSmall, RGB(250, 250, 250));
+        c.fillRound(plot, theme::M.radiusSmall, theme::fieldBack(false));
         // Baseline grid at 50% so the reader can judge magnitude quickly.
         c.line(plot.x, plot.cy(), plot.right(), plot.cy(), theme::ChartGrid);
         std::vector<float> samples(history.begin(), history.end());
@@ -810,7 +814,7 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     Rect logArea{logCard.x + theme::M.px(16), logCard.y + theme::M.px(34),
                  logCard.w - theme::M.px(32), logH - theme::M.px(46)};
-    c.fillRound(logArea, theme::M.radiusSmall, RGB(249, 249, 249));
+    c.fillRound(logArea, theme::M.radiusSmall, theme::fieldBack(false));
     Rect inner = logArea.inset(theme::M.px(8));
     int shown = 0;
     size_t total = logTail_.size();

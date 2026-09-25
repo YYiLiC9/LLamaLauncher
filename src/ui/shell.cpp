@@ -264,14 +264,6 @@ void Canvas::glyph(const Rect& r, wchar_t code, COLORREF color, int sizePt) {
     text(r, s, color, font, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
-void Canvas::overlay(const Rect& r, int radius, BYTE alpha) {
-    // GDI has no alpha blending, so the tint is produced by re-drawing the
-    // rounded rectangle in a colour that was pre-mixed against the base fill.
-    // The caller passes the base colour through `tintOver`.
-    (void)alpha;
-    // The surface underneath is already visible; just make sure it stays so.
-}
-
 // ------------------------------------------------------------------ buttons --
 void button(Canvas& c, const Rect& r, const std::wstring& label, ButtonStyle style, bool hovered,
             bool pressed, bool focused, wchar_t leadingGlyph, wchar_t trailingGlyph, bool enabled) {

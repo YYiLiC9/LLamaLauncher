@@ -148,6 +148,9 @@ private:
     // from onSize and whenever the view changes.
     void syncWebView();
     int  chatPort() const;
+    // Port the embedded browser was last pointed at; a WM_SIZE must not
+    // re-navigate (that reloads the page and loses the chat).
+    int webviewNavPort_ = -1;
     std::vector<const store::Config*> filteredConfigs() const;
     bool anyServerRunning() const;
     DWORD activePid() const;

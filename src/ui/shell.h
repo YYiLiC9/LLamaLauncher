@@ -99,9 +99,6 @@ public:
     // is how the toolbar icons are drawn without any image assets.
     void glyph(const Rect& r, wchar_t code, COLORREF color, int sizePt);
 
-    // Applies a translucent black overlay, the way Windows 11 tints hover.
-    void overlay(const Rect& r, int radius, BYTE alpha);
-
 private:
     HDC dc_;
 };

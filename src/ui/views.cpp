@@ -1205,14 +1205,13 @@ protected:
         for (size_t i = 0; i < rows_.size(); ++i) {
             bool vis = i < visible_.size() && visible_[i];
             RowWidgets& w = rowWidgets_[i];
-            if (!w.created) {
-                y += rowH();
-                continue;
-            }
-            if (!vis) {
+            // Filtered rows take no slot at all: the visible rows stack from
+            // the top of the list, exactly as the paint pass draws them.
+            // (Advancing y here too left the editors sitting in the slots of
+            // the unfiltered list - off-screen for most groups.)
+            if (!vis || !w.created) {
                 if (w.flag) ::ShowWindow(w.flag, SW_HIDE);
                 if (w.value) ::ShowWindow(w.value, SW_HIDE);
-                y += rowH();
                 continue;
             }
             Rect row{rows.x, y, rows.w, rowH()};
@@ -1424,9 +1423,11 @@ protected:
             const Row& r = rows_[i];
             // Read-only here: visibility is decided by recomputeVisible() before
             // the controls are placed, so paint and placement cannot disagree.
-            if (!(activeGroup_ < 0 || rowInActiveGroup(r))) {
-                continue;
-            }
+            bool vis = activeGroup_ < 0 || rowInActiveGroup(r);
+            if (!vis) continue;
+            // Visible rows stack from the top of the list: a group filter must
+            // bring its own parameters into view, not leave them in the slots
+            // they occupied in the unfiltered list (which is off-screen).
             Rect row{rows.x, y, rows.w, rowH()};
             y += rowH();
 
@@ -1435,7 +1436,10 @@ protected:
                 c.line(row.x + theme::M.px(10), row.bottom(), row.right() - theme::M.px(10),
                        row.bottom(), theme::Divider);
             }
-            if (row.bottom() < rows.top() - rowH() || row.top() > rows.bottom() + rowH()) {
+            // Rows entirely outside the drawn area register no hit regions:
+            // their rectangles would overlap the command preview strip, where a
+            // click silently flipped a parameter nobody could see.
+            if (row.bottom() <= clipRect.top() || row.top() >= clipRect.bottom()) {
                 continue;
             }
 
@@ -1541,8 +1545,9 @@ protected:
             int lines = std::max(1, (pv.h - padY * 2 + theme::M.px(4)) / std::max(1, lineH));
             Rect inner{pv.x + padX, pv.y + padY, pv.w - padX * 2, pv.h - padY * 2};
 
-            ::SelectClipRgn(c.dc(), ::CreateRectRgn(inner.left(), inner.top(),
-                                                    inner.right(), inner.bottom()));
+            HRGN previewClip =
+                ::CreateRectRgn(inner.left(), inner.top(), inner.right(), inner.bottom());
+            ::SelectClipRgn(c.dc(), previewClip);
             auto cmdLines = wrapCommand(c.dc(), previewText_, inner.w,
                                         std::min(lines, 3));
             int ly = inner.y;
@@ -1553,6 +1558,7 @@ protected:
                 ly += lineH;
             }
             ::SelectClipRgn(c.dc(), nullptr);
+            ::DeleteObject(previewClip);
         }
 
         // ---- footer ----
@@ -2233,10 +2239,10 @@ namespace {
 class LogDialog : public Dialog {
 public:
     explicit LogDialog(std::vector<std::wstring> lines) : lines_(std::move(lines)) {
-        int perPage = 40;
-        int pages = (int)((lines_.size() + perPage - 1) / std::max(1, perPage));
-        pages_ = std::max(1, pages);
-        page_ = pages_ - 1;   // start on the newest lines
+        // Pages depend on the console area, which is only known at paint time
+        // (it moves with DPI and resizing). -1 means "not computed yet"; the
+        // first paint lands on the newest lines.
+        page_ = -1;
     }
 
 protected:
@@ -2266,20 +2272,27 @@ protected:
                 page_ < pages_ - 1 ? theme::TextPrimary : theme::TextDisabled, 13);
         c.glyph(bottom, shell::glyphs::kImport, theme::TextPrimary, 13);
 
-        // Console surface.
+        // Console surface. A fixed light grey read as a glaring white slab in
+        // the dark theme, so the muted field colour tracks the palette.
         Rect area{theme::M.px(16), theme::M.px(56) + theme::M.px(12),
                   client.w - theme::M.px(32),
                   client.h - theme::M.px(56) - theme::M.px(70)};
-        c.fillRound(area, theme::M.radiusSmall, RGB(248, 248, 248));
+        c.fillRound(area, theme::M.radiusSmall, theme::fieldBack(false));
         c.strokeRound(area, theme::M.radiusSmall, theme::Border);
 
+        // The page split must come from the real capacity of the console area.
+        // The constructor's constant guess (40 lines) ignored DPI and resizing:
+        // on a 175% display one page only fits ~24 lines, so every page skipped
+        // its tail and those log lines could never be seen.
         int lineH = theme::M.px(18);
         int perPage = std::max(1, (area.h - theme::M.px(16)) / lineH);
-        size_t start = (size_t)page_ * (size_t)(lines_.size() > 0 ? (lines_.size() + pages_ - 1) / pages_ : perPage);
-        // Recompute using the actual page size so pages stay aligned with the view.
-        size_t pageSize = lines_.size() > 0 ? (lines_.size() + pages_ - 1) / pages_ : 0;
-        if (pageSize == 0) pageSize = perPage;
-        start = std::min(start, lines_.size());
+        int pages = std::max(1, (int)((lines_.size() + perPage - 1) / perPage));
+        if (pages != pages_) {
+            pages_ = pages;
+            page_ = page_ < 0 ? pages_ - 1 : std::clamp(page_, 0, pages_ - 1);
+        }
+        size_t start = (size_t)page_ * (size_t)perPage;
+        if (start > lines_.size()) start = lines_.size();
 
         Rect inner = area.inset(theme::M.px(8));
         int shown = 0;

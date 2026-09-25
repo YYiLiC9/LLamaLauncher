@@ -23,6 +23,10 @@ constexpr wchar_t kSearchClass[] = L"LlamaLauncherSearchBox";
 constexpr UINT_PTR kTimerId = 1;
 constexpr int kTimerMs = 1000;      // resource sampling cadence
 
+// The search box superclasses the standard EDIT control; everything the custom
+// handler does not touch is chained back to EDIT itself.
+WNDPROC g_searchEditBase = nullptr;
+
 // Windows 11 non-client attributes. Setting these through DwmSetWindowAttribute
 // is what gives the window rounded corners and a light title bar that matches
 // the app surface.
@@ -84,13 +88,17 @@ bool App::init(HINSTANCE inst) {
     wc.hIconSm = wc.hIcon;
     if (!::RegisterClassExW(&wc)) return false;
 
+    // The search box superclasses the standard EDIT control. A hand-rolled
+    // class cannot work here: a non-EDIT child never sends WM_COMMAND with
+    // EN_CHANGE (nor WM_CTLCOLOREDIT), which left the sidebar filter dead.
+    // Superclassing keeps real text editing, the caret and those notifications
+    // while SearchProc still provides the themed background and Escape handling.
     WNDCLASSEXW ec{};
     ec.cbSize = sizeof(ec);
-    ec.style = 0;
+    if (!::GetClassInfoExW(nullptr, L"EDIT", &ec)) return false;
+    g_searchEditBase = ec.lpfnWndProc;      // chain here for everything else
     ec.lpfnWndProc = &App::SearchProc;
     ec.hInstance = inst_;
-    ec.hCursor = ::LoadCursorW(nullptr, IDC_IBEAM);
-    ec.hbrBackground = nullptr;
     ec.lpszClassName = kSearchClass;
     if (!::RegisterClassExW(&ec)) return false;
 
@@ -337,7 +345,9 @@ LRESULT CALLBACK App::SearchProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             break;
     }
-    return ::DefWindowProcW(hwnd, msg, wp, lp);
+    // Text storage, caret and the EN_CHANGE notifications the sidebar filter
+    // depends on all live in the EDIT implementation we superclassed.
+    return ::CallWindowProcW(g_searchEditBase, hwnd, msg, wp, lp);
 }
 
 void App::ensureSearchEdit() {
@@ -500,8 +510,14 @@ void App::syncWebView() {
 
         std::wstring url = util::format(L"http://127.0.0.1:%d", chatPort());
         if (!webView_.create(hwnd_, util::joinPath(paths::dataRoot(), L"webview"), url)) return;
-    } else {
-        webView_.navigate(util::format(L"http://127.0.0.1:%d", chatPort()));
+        webviewNavPort_ = chatPort();
+    } else if (webviewNavPort_ != chatPort()) {
+        // Re-navigate only when the port actually changed. Every WM_SIZE used
+        // to land here (resizing, snapping, minimise/restore), reloading the
+        // whole page and throwing away whatever was typed into the chat.
+        std::wstring url = util::format(L"http://127.0.0.1:%d", chatPort());
+        webView_.navigate(url);
+        webviewNavPort_ = chatPort();
     }
 
     if (HWND h = webView_.host()) {
