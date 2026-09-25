@@ -263,6 +263,33 @@ bool isBlockIndicator(const std::wstring& v) {
     return v == L"|" || v == L"|-" || v == L"|+" || v == L">" || v == L">-" || v == L">+";
 }
 
+// Collects the block-scalar body that follows rawLines[i] (a key written with
+// `|` / `>`), whose own indent is baseIndent. Stops at the first line indented
+// no deeper than the key; advances i to the last consumed line. Shared by the
+// mapping and sequence-item branches.
+std::wstring collectBlockBody(const std::vector<std::wstring>& rawLines, size_t& i,
+                              int baseIndent) {
+    std::wstring collected;
+    size_t j = i + 1;
+    for (; j < rawLines.size(); ++j) {
+        std::wstring sub = rawLines[j];
+        if (!sub.empty() && sub.back() == L'\r') sub.pop_back();
+        size_t sLead = 0;
+        while (sLead < sub.size() && (sub[sLead] == L' ' || sub[sLead] == L'\t')) ++sLead;
+        if (sLead <= (size_t)baseIndent && !sub.substr(sLead).empty()) break;
+        if (util::trim(sub).empty()) {
+            collected += L"\n";
+            continue;
+        }
+        if (!collected.empty() && collected.back() != L'\n') collected += L"\n";
+        collected += sub.substr(sLead);
+    }
+    // Trim a trailing newline produced by blank separator lines.
+    while (!collected.empty() && collected.back() == L'\n') collected.pop_back();
+    i = (j > 0) ? j - 1 : i;
+    return collected;
+}
+
 class Parser {
 public:
     explicit Parser(const std::vector<Line>& lines) : lines_(lines) {}
@@ -290,7 +317,15 @@ private:
             if (l.indent < indent || l.kind != Line::Kind::SeqItem) break;
 
             if (l.usesBlockScalar) {
-                node.push(Node::scalar(l.blockScalar));
+                // "- key: |" is a mapping whose value is the block; a bare
+                // "-" with a block body stays a plain scalar.
+                if (!l.key.empty()) {
+                    Node item = Node::map();
+                    item.set(l.key, Node::scalar(l.blockScalar));
+                    node.push(std::move(item));
+                } else {
+                    node.push(Node::scalar(l.blockScalar));
+                }
                 ++pos_;
                 continue;
             }
@@ -380,7 +415,11 @@ bool parse(const std::wstring& text, Node& out, std::wstring& error) {
         // ---------------- sequence item ----------------
         if (body[0] == L'-' && (body.size() == 1 || body[1] == L' ' || body[1] == L'\t')) {
             line.kind = Line::Kind::SeqItem;
-            std::wstring rest = body.size() > 1 ? util::trim(body.substr(1)) : L"";
+            // Strip the comment before the key/value split so a trailing
+            // "# ..." never lands inside the value; stripComment is
+            // quote-aware, so values containing a real "#" survive.
+            std::wstring rest =
+                util::trim(stripComment(body.size() > 1 ? body.substr(1) : L""));
             if (rest.empty()) {
                 line.hasInline = false;
             } else {
@@ -388,7 +427,10 @@ bool parse(const std::wstring& text, Node& out, std::wstring& error) {
                 if (splitKeyValue(rest, k, v)) {
                     line.key = unquote(k);
                     if (isBlockIndicator(v)) {
+                        // Same rule as a mapping key: the deeper-indented
+                        // lines that follow are the value.
                         line.usesBlockScalar = true;
+                        line.blockScalar = collectBlockBody(rawLines, i, indent);
                     } else {
                         line.value = v;
                         line.hasInline = true;
@@ -416,26 +458,7 @@ bool parse(const std::wstring& text, Node& out, std::wstring& error) {
         if (isBlockIndicator(v)) {
             line.usesBlockScalar = true;
             // Everything more indented than this key belongs to the scalar.
-            std::wstring collected;
-            int baseIndent = indent;
-            size_t j = i + 1;
-            for (; j < rawLines.size(); ++j) {
-                std::wstring sub = rawLines[j];
-                if (!sub.empty() && sub.back() == L'\r') sub.pop_back();
-                size_t sLead = 0;
-                while (sLead < sub.size() && (sub[sLead] == L' ' || sub[sLead] == L'\t')) ++sLead;
-                if (sLead <= (size_t)baseIndent && !sub.substr(sLead).empty()) break;
-                if (util::trim(sub).empty()) {
-                    collected += L"\n";
-                    continue;
-                }
-                if (!collected.empty() && collected.back() != L'\n') collected += L"\n";
-                collected += sub.substr(sLead);
-            }
-            // Trim a trailing newline produced by blank separator lines.
-            while (!collected.empty() && collected.back() == L'\n') collected.pop_back();
-            line.blockScalar = collected;
-            i = (j > 0) ? j - 1 : i;
+            line.blockScalar = collectBlockBody(rawLines, i, indent);
             lines.push_back(line);
             continue;
         }
