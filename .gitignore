@@ -1,0 +1,40 @@
+# ---- Build output ----
+build/
+out/
+bin/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+*.dll
+*.res
+
+# ---- CMake ----
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CMakeUserPresets.json
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+
+# ---- IDE / editor ----
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---- WorkBuddy session state ----
+.workbuddy/
+
+# ---- Local scratch files ----
+_env*.txt
+*.tmp
+/_*.png
+/_*.txt
+/_syntax/
