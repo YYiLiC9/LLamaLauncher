@@ -57,6 +57,10 @@ private:
     std::atomic<bool> ready_{false};
     std::atomic<bool> exited_{false};
     std::atomic<int> exitCode_{-1};
+    // Bumped on every start()/stop(). Reader and watchdog capture the value
+    // they were born with and go silent once it no longer matches, which is
+    // what makes handing a slow death to a detached reaper thread safe.
+    std::atomic<uint64_t> generation_{0};
 
     std::mutex mutex_;
     std::deque<std::wstring> pending_;

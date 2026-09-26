@@ -136,6 +136,18 @@ static const std::vector<Spec>& buildTable() {
          L"Proportion of the model per GPU, comma separated.",
          L"各 GPU 的模型分配比例，逗号分隔。"},
 
+        // KV cache quantization - the q8_0 / q4_0 knobs. Quantizing the cache
+        // trades a little quality for a lot of context memory, which matters
+        // on 8-16GB cards running long contexts.
+        {L"-ctk", L"--cache-type-k", nullptr, Group::Gpu, false, false, false, false, L"",
+         L"f16|q8_0|q4_0",
+         L"KV cache K quantization type (f16, q8_0, q4_0, ...).",
+         L"KV 缓存 K 量化类型（f16、q8_0、q4_0 等）。"},
+        {L"-ctv", L"--cache-type-v", nullptr, Group::Gpu, false, false, false, false, L"",
+         L"f16|q8_0|q4_0",
+         L"KV cache V quantization type (f16, q8_0, q4_0, ...).",
+         L"KV 缓存 V 量化类型（f16、q8_0、q4_0 等）。"},
+
         {L"-mg", L"--main-gpu", nullptr, Group::Gpu, false, true, false, false, L"", L"0",
          L"Index of the primary GPU.", L"主 GPU 的编号。"},
 

@@ -551,11 +551,13 @@ void App::stopServer() {
     server_.stop();
     // A llama-server the app did not start itself is not tracked by Server:
     // without an explicit terminate, "停止服务" only cleared the UI while the
-    // process kept the port. Terminate and wait so the port is really free.
+    // process kept the port. Terminate and wait briefly - a GPU driver
+    // unmapping a big VRAM allocation can take seconds, and blocking the UI
+    // for that long made stopping feel frozen.
     if (externalPid_ != 0) {
         if (HANDLE p = ::OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, externalPid_)) {
             ::TerminateProcess(p, 0);
-            ::WaitForSingleObject(p, 5000);
+            ::WaitForSingleObject(p, 500);
             ::CloseHandle(p);
         }
         externalPid_ = 0;

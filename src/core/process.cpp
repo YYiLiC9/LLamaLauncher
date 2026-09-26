@@ -87,6 +87,9 @@ bool ServerProcess::start(const std::wstring& exe, const std::wstring& args,
     exited_ = false;
     exitCode_ = -1;
     ready_ = false;
+    // Invalidate any threads still running from a previous run on this object
+    // (a detached reaper may hold a slow death for seconds).
+    generation_.fetch_add(1);
 
     // A job object guarantees the whole process tree dies with us, even if the
     // user force-closes the launcher.
@@ -108,7 +111,7 @@ bool ServerProcess::start(const std::wstring& exe, const std::wstring& args,
                                             cmd.c_str()));
     }
 
-    reader_ = std::thread([this, readPipe, logPath] {
+    reader_ = std::thread([this, gen = generation_.load(), readPipe, logPath] {
         std::string buffer;
         char chunk[4096];
         FILE* log = nullptr;
@@ -128,19 +131,24 @@ bool ServerProcess::start(const std::wstring& exe, const std::wstring& args,
                 std::string line = buffer.substr(0, pos);
                 buffer.erase(0, pos + 1);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                appendLine(line);
+                // A retired reader (stop() moved on without us) must not feed
+                // a successor run's output buffer.
+                if (gen == generation_.load()) appendLine(line);
             }
         }
-        if (!buffer.empty()) appendLine(buffer);
+        if (!buffer.empty() && gen == generation_.load()) appendLine(buffer);
         if (log) ::fclose(log);
         ::CloseHandle(readPipe);
     });
 
     // Watchdog: notices the process exiting and records its code. It only ever
     // touches the shared exit flags, never the handle - stop() owns that.
+    // Retired watchdogs go silent: a slow GPU teardown may outlive stop() by
+    // seconds, and must not flag a successor run as exited.
     HANDLE watchTarget = process_;
-    watchdog_ = std::thread([this, watchTarget] {
+    watchdog_ = std::thread([this, gen = generation_.load(), watchTarget] {
         ::WaitForSingleObject(watchTarget, INFINITE);
+        if (gen != generation_.load()) return;
         DWORD code = 0;
         ::GetExitCodeProcess(watchTarget, &code);
         exitCode_ = (int)code;
@@ -186,32 +194,53 @@ bool ServerProcess::isRunning() const {
 }
 
 void ServerProcess::stop() {
-    // The watchdog may be blocked on the process handle, so the handles can
-    // only be closed once it has been joined. Terminate first, then unwind.
+    // Terminate first: the watchdog may be blocked on the process handle, so
+    // the handles can only be closed once it has been joined.
     if (process_ && isRunning()) {
         if (job_) ::TerminateJobObject(job_, 0);
         ::TerminateProcess(process_, 0);
-        ::WaitForSingleObject(process_, 5000);
     }
 
-    if (reader_.joinable()) reader_.join();
-    if (watchdog_.joinable()) watchdog_.join();
-
-    if (thread_) {
-        ::CloseHandle(thread_);
-        thread_ = nullptr;
-    }
-    if (process_) {
-        ::CloseHandle(process_);
-        process_ = nullptr;
-    }
-    if (job_) {
-        ::CloseHandle(job_);
-        job_ = nullptr;
-    }
+    HANDLE proc = process_;
+    HANDLE thr = thread_;
+    HANDLE job = job_;
     pid_ = 0;
     ready_ = false;
     exited_ = true;
+    // Retire this run's reader/watchdog: whatever they still observe must not
+    // leak into a successor run's state.
+    generation_.fetch_add(1);
+
+    if (!proc) {
+        // Nothing was running; just unwind any leftover threads.
+        if (reader_.joinable()) reader_.join();
+        if (watchdog_.joinable()) watchdog_.join();
+    } else if (::WaitForSingleObject(proc, 500) == WAIT_OBJECT_0) {
+        // Quick death: unwind inline as before.
+        if (reader_.joinable()) reader_.join();
+        if (watchdog_.joinable()) watchdog_.join();
+        if (thr) ::CloseHandle(thr);
+        if (job) ::CloseHandle(job);
+        ::CloseHandle(proc);
+    } else {
+        // Still tearing down. Unmapping a large VRAM allocation can hold a GPU
+        // process for seconds, and waiting for that here froze the UI on
+        // every stop. Hand everything to a detached reaper: both threads have
+        // been retired via the generation counter, so touching shared state
+        // is no longer possible, and the reaper only joins and closes.
+        std::thread reaper([proc, thr, job](std::thread rd, std::thread wd) {
+            if (proc) ::WaitForSingleObject(proc, 15000);
+            if (rd.joinable()) rd.join();
+            if (wd.joinable()) wd.join();
+            if (thr) ::CloseHandle(thr);
+            if (job) ::CloseHandle(job);
+        }, std::move(reader_), std::move(watchdog_));
+        reaper.detach();
+    }
+
+    process_ = nullptr;
+    thread_ = nullptr;
+    job_ = nullptr;
 }
 
 bool openInBrowser(const std::wstring& url) {

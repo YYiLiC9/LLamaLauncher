@@ -489,15 +489,16 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
     std::wstring cmd = store::buildDisplayCommand(cfg, store_.serverExe());
     int textOuterW = w - theme::M.px(32);
     int textInnerW = textOuterW - theme::M.px(16);   // the box's own inset
-    SIZE msz{};
+    // Measure the wrapped height with DrawText's own engine (DT_CALCRECT,
+    // same flags as the actual draw). The old char-budget estimate ignored
+    // word boundaries, and the mismatch clipped the last line whenever the
+    // wrap points landed earlier than the budget assumed.
+    RECT calc{0, 0, textInnerW, 0};
     HGDIOBJ oldMono = ::SelectObject(c.dc(), theme::fontMono());
-    ::GetTextExtentPoint32W(c.dc(), L"MM", 2, &msz);
+    ::DrawTextW(c.dc(), cmd.c_str(), -1, &calc,
+                DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
     ::SelectObject(c.dc(), oldMono);
-    int charW = std::max(1, (int)(msz.cx / 2));
-    int perLine = std::max(1, textInnerW / charW);
-    int lines = std::max(1, (int)((cmd.size() + perLine - 1) / perLine));
-    int lineH = theme::lineHeight(theme::fontMono());
-    int textH = lines * lineH + theme::M.px(12);
+    int textH = calc.bottom + theme::M.px(4);   // small slack for rounding at high DPI
     int cmdCardH = theme::M.px(8) + theme::M.px(28) + theme::M.px(8) + textH + theme::M.px(16);
 
     Rect cmdCard{x, y, w, cmdCardH};
@@ -522,12 +523,15 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
     Rect cmdText{cmdCard.x + theme::M.px(16), cmdCard.y + theme::M.px(44), textOuterW, textH};
     c.fillRound(cmdText, theme::M.radiusSmall, theme::fieldBack(false));
     c.text(cmdText.inset(theme::M.px(8)), cmd, theme::TextSecondary, theme::fontMono(),
-           DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+           DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
 
     y = cmdCard.bottom() + theme::M.gapLarge;
 
     // ---- grouped parameters ----
     // Group order matches the editor so the two views feel like the same thing.
+    // Only parameters that actually reach the command line are listed here:
+    // a saved config showed dozens of greyed-out rows for disabled flags,
+    // which drowned the ones that matter.
     struct Section {
         catalog::Group group;
         std::wstring title;
@@ -537,6 +541,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
         auto grp = (catalog::Group)g;
         bool hasAny = false;
         for (const store::Param& p : cfg.params) {
+            if (!p.enabled) continue;
             const catalog::Spec* spec = catalog::find(p.flag);
             if (grp == catalog::Group::Custom) {
                 if (p.custom) hasAny = true;
@@ -551,6 +556,7 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
         // Gather the rows for this section.
         std::vector<const store::Param*> rows;
         for (const store::Param& p : cfg.params) {
+            if (!p.enabled) continue;
             const catalog::Spec* spec = catalog::find(p.flag);
             if (s.group == catalog::Group::Custom) {
                 if (p.custom) rows.push_back(&p);
