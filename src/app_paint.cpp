@@ -769,21 +769,27 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         Rect r{x, y, tileW, tileH};
         double f = monitor_.cpuPercent() / 100.0;
         std::wstring primary = util::format(L"%d%%", monitor_.cpuPercent());
+        // Secondary line: the server's own footprint. The per-process CPU
+        // counter has no data for the first couple of samples (and none at
+        // all for an adopted process) - showing 不可用 there read like the
+        // whole CPU tile was broken.
         std::wstring secondary =
-            monitor_.processCpuPercent() ? util::format(L"%d%% · %s", monitor_.processCpuPercent(),
-                                                        T(Str::MetricThreads))
-                                         : std::wstring(T(Str::NotAvailable));
+            monitor_.processWorkingSet()
+                ? util::humanBytes(monitor_.processWorkingSet())
+                : std::wstring(T(Str::NotAvailable));
         shell::metricTile(c, r, T(Str::MetricCpu), primary, secondary, f, kCpuColor,
                           shell::glyphs::kChip);
     }
     {
         Rect r{x + tileW + gap, y, tileW, tileH};
-        // The ring shows GPU engine utilization of the server process only
-        // (no engine counter or no process -> 0). VRAM stays in the secondary
-        // line: mixing it into the ring made the number and the arc disagree.
-        double f = gpu.hasEngineCounter ? monitor_.gpuPercent() / 100.0 : 0.0;
-        std::wstring primary = gpu.hasEngineCounter ? util::format(L"%d%%", monitor_.gpuPercent())
-                                                   : std::wstring(T(Str::NotAvailable));
+        // The ring shows VRAM usage: it is the number that always means
+        // something while the model is loaded (12GB of weights = a 78% ring),
+        // whereas engine utilization sits at 0 whenever nothing is inferring
+        // and read as "broken". The engine utilization lives in the chart
+        // below, where its spiky inference-only nature makes sense.
+        double f = gpu.vramValid ? gpu.vramPercent / 100.0 : 0.0;
+        std::wstring primary = gpu.vramValid ? util::format(L"%u%%", gpu.vramPercent)
+                                            : std::wstring(T(Str::NotAvailable));
         std::wstring secondary;
         if (gpu.vramValid)
             secondary = util::format(L"%s / %s", util::humanBytes(gpu.vramUsed).c_str(),
@@ -807,7 +813,10 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     y += tileH + theme::M.gapLarge;
 
     // ---- sparkline charts ----
-    Rect chartCard{x, y, w, theme::M.px(190)};
+    // Height budget: 18 top pad + two rows of (20 head + 62 plot + 14 gap)
+    // minus the trailing gap + 16 bottom pad = 212; at 190 the second chart's
+    // plot spilled past the card border.
+    Rect chartCard{x, y, w, theme::M.px(212)};
     shell::card(c, chartCard);
 
     int cx = chartCard.x + theme::M.px(18);
@@ -846,14 +855,17 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     y = chartCard.bottom() + theme::M.gap;
 
     // ---- process footprint rows ----
-    Rect procCard{x, y, w, theme::M.px(122)};
+    // Title 10..28, then three 24px rows separated by 4px: 32+24*3+4*2+8 =
+    // 124 total. The old 36px top offset + 26px rows overflowed the 122px
+    // card and sat visually off-centre.
+    Rect procCard{x, y, w, theme::M.px(124)};
     shell::card(c, procCard);
     shell::sectionTitle(c, Rect{procCard.x + theme::M.px(16), procCard.y + theme::M.px(10),
                                 procCard.w - theme::M.px(32), theme::M.px(18)},
                        T(Str::MetricMemory));
 
-    int ry = procCard.y + theme::M.px(36);
-    int rowH = theme::M.px(26);
+    int ry = procCard.y + theme::M.px(32);
+    int rowH = theme::M.px(24);
     double memFrac = mem.total ? (double)mem.used / (double)mem.total : 0.0;
     shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH},
                     T(Str::MetricMemory),
@@ -881,8 +893,11 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     y = procCard.bottom() + theme::M.gap;
 
     // ---- live log tail ----
+    // 34 (title row) + 8*18 (lines) + 28 (top inset + bottom pad) keeps the
+    // eighth line inside the console area - at +12 the last line crossed the
+    // border.
     int logLines = 8;
-    int logH = theme::M.px(34) + logLines * theme::M.px(18) + theme::M.px(12);
+    int logH = theme::M.px(34) + logLines * theme::M.px(18) + theme::M.px(28);
     Rect logCard{x, y, w, logH};
     shell::card(c, logCard);
     shell::sectionTitle(c, Rect{logCard.x + theme::M.px(16), logCard.y + theme::M.px(10),

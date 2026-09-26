@@ -2402,10 +2402,18 @@ protected:
         int lineH = theme::M.px(18);
         int perPage = std::max(1, (area.h - theme::M.px(16)) / lineH);
         int pages = std::max(1, (int)((lines.size() + perPage - 1) / perPage));
-        if (pages != pages_) {
-            pages_ = pages;
-            page_ = page_ < 0 ? pages_ - 1 : std::clamp(page_, 0, pages_ - 1);
-        }
+        // Sync unconditionally: guarding on "pages changed" left page_ at its
+        // -1 sentinel forever when the log never grew past one page, and the
+        // start offset then collapsed to lines.size() - a blank console that
+        // only recovered after the user clicked a page button.
+        // While the user is already reading the last page, stay on the tail as
+        // new lines arrive; otherwise keep the page they scrolled to.
+        bool followTail = page_ < 0 || page_ >= pages_ - 1;
+        pages_ = pages;
+        if (followTail)
+            page_ = pages_ - 1;
+        else
+            page_ = std::clamp(page_, 0, pages_ - 1);
         size_t start = (size_t)page_ * (size_t)perPage;
         if (start > lines.size()) start = lines.size();
 
