@@ -61,9 +61,16 @@ bool ServerProcess::start(const std::wstring& exe, const std::wstring& args,
 
     PROCESS_INFORMATION pi{};
     // CREATE_NO_WINDOW keeps the console from flashing up; the pipe still
-    // receives everything the server prints.
-    BOOL ok = ::CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                               nullptr, cwdBuf.empty() ? nullptr : cwdBuf.data(), &si, &pi);
+    // receives everything the server prints. CREATE_DEFAULT_ERROR_MODE +
+    // SEM_FAILCRITICALERRORS: when the configured llama-server.exe is broken
+    // (a DLL next to it is missing, say), the loader's "找不到 xxx.dll"
+    // hard-error box must not pop up on top of the launcher - the process
+    // just fails to start, and the exit code surfaces that in the UI instead.
+    UINT oldErrorMode = ::SetErrorMode(SEM_FAILCRITICALERRORS);
+    BOOL ok = ::CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                               CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE, nullptr,
+                               cwdBuf.empty() ? nullptr : cwdBuf.data(), &si, &pi);
+    ::SetErrorMode(oldErrorMode);
     ::CloseHandle(writePipe);
 
     if (!ok) {

@@ -106,8 +106,11 @@ static const std::vector<Spec>& buildTable() {
          L"512",
          L"Physical batch size.", L"物理批大小。"},
 
-        {L"-fa", L"--flash-attn", nullptr, Group::Performance, true, false, false, false, L"on",
-         L"",
+        // Not a pure switch: llama.cpp's --flash-attn takes a value
+        // (on|off|auto), and emitting it bare made the next flag on the line
+        // (" -ngl") its value - "unknown value for --flash-attn: '-ngl'".
+        {L"-fa", L"--flash-attn", nullptr, Group::Performance, false, false, false, false, L"on",
+         L"on|off|auto",
          L"Flash attention. Faster and lighter on memory.",
          L"Flash Attention，速度更快且更省内存。"},
 
