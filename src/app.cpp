@@ -500,6 +500,17 @@ bool App::startConfig(const std::wstring& id) {
     const store::Config* cfg = store_.find(id);
     if (!cfg) return false;
 
+    // llama-server serves one model per process: a second "启动" while
+    // something is already running would silently kill the first model.
+    // The detail pages of the other configurations show 启动 too, so this
+    // needs a visible explanation rather than a silent switch.
+    if (processAlive() && runningConfigId_ != id) {
+        toast_ = T(Str::ServerBusy);
+        toastUntil_ = util::nowSeconds() + 4;
+        ::InvalidateRect(hwnd_, nullptr, FALSE);
+        return false;
+    }
+
     if (server_.isRunning()) server_.stop();
     externalPid_ = 0;
 
@@ -528,6 +539,7 @@ bool App::startConfig(const std::wstring& id) {
 
     logTail_.clear();
     runStarted_ = util::nowSeconds();
+    runningConfigId_ = id;
     selectedId_ = id;
     view_ = View::Running;
     contentScroll_ = 0;
@@ -549,6 +561,7 @@ void App::stopServer() {
         externalPid_ = 0;
     }
     logTail_.clear();
+    runningConfigId_.clear();
     // The run is over, so the resource view has nothing left to show - fall
     // back to the selected configuration (or the welcome screen).
     if (view_ == View::Running) {
@@ -715,6 +728,7 @@ void App::onTimer() {
     if (wasRunning && !running) {
         // The process ended on its own (crash or exit): the resource view has
         // nothing to monitor any more, so leave it like stopServer does.
+        runningConfigId_.clear();
         if (view_ == View::Running) {
             setView(selected() ? View::Detail : View::Welcome);
             contentScroll_ = 0;

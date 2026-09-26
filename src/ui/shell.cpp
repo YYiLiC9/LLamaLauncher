@@ -243,6 +243,14 @@ void Canvas::ring(int cx, int cy, int radius, int thickness, double fraction,
                         if (endFrac <= startFrac) return;
                         const double startDeg = 90.0 - startFrac * 360.0;
                         const double sweepDeg = -(endFrac - startFrac) * 360.0;
+                        // AngleArc draws a line from the current position to
+                        // the arc start. On a fresh DC that position is the
+                        // origin, which dragged a stray line across the ring -
+                        // always move to the arc start first.
+                        const double rad = startDeg * 3.14159265358979323846 / 180.0;
+                        ::MoveToEx(c.dc(),
+                                   (int)std::lround(cx + radius * std::cos(rad)),
+                                   (int)std::lround(cy - radius * std::sin(rad)), nullptr);
                         HPEN pen = ::CreatePen(PS_SOLID, thickness, col);
                         HGDIOBJ op = ::SelectObject(c.dc(), pen);
                         HGDIOBJ ob = ::SelectObject(c.dc(), ::GetStockObject(NULL_BRUSH));

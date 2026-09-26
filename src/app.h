@@ -170,6 +170,9 @@ private:
 
     proc::ServerProcess server_;
     monitor::Monitor monitor_;
+    // Configuration the running server belongs to. Empty while an adopted
+    // external llama-server runs (its origin is unknown) or nothing runs.
+    std::wstring runningConfigId_;
     // Created lazily the first time the chat view is opened, so an unused
     // launcher never spawns a browser process.
     web::WebView webView_;

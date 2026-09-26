@@ -159,6 +159,7 @@ enum class Str {
     MonitorMinimize,
     LogEmpty,
     LogExternal,
+    ServerBusy,
     // Read-only strip showing the command the launch would run.
     CommandPreview,
     // Rejected when the user picks a name a configuration already uses.

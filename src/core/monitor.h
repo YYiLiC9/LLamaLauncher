@@ -68,7 +68,8 @@ private:
     void freeGpuCounters();
     bool addGpuCounters();
     // Sums every wildcard instance whose name matches the target adapter.
-    bool sumCounterArray(void* counter, uint64_t& total, bool percentMode, int& instanceCount);
+    bool sumCounterArray(void* counter, uint64_t& total, bool percentMode, int& instanceCount,
+                         const std::wstring& mustContain = std::wstring());
 
     void push(std::deque<float>& d, float v);
 

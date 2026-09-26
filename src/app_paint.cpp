@@ -311,14 +311,11 @@ void App::paintContent(Canvas& c, const Frame& f) {
             break;
     }
 
-    // Corner ball while the server runs and the monitor is not on screen:
-    // leaving the Running view minimizes it, and this is what brings it back.
-    // Not drawn in the chat view - the WebView pane covers that area, so the
-    // ball there would be unreachable; the chat bar's back button already
-    // returns to the live view. Needs a selection: the monitor reports on the
-    // selected configuration, and a Running view without one snaps back to
-    // the welcome screen, which would make the ball a dead end.
-    if (selected() && processAlive() && view_ != View::Running && view_ != View::Chat) {
+    // Corner ball, always present (except in the chat view, where the WebView
+    // pane covers that corner and the chat bar's back button already leaves
+    // the view). It opens the resource view; with the server down the monitor
+    // shows the stopped state. Accent while running, neutral when idle.
+    if (view_ != View::Running && view_ != View::Chat && !store_.configs().empty()) {
         int d = theme::M.px(52);
         Rect ball{f.content.right() - d - theme::M.px(24), f.content.bottom() - d - theme::M.px(24),
                   d, d};
@@ -326,21 +323,24 @@ void App::paintContent(Canvas& c, const Frame& f) {
         addHit(ball, Action::RestoreMonitor);
         bool hov = idx == hoverIndex_;
         bool pre = idx == pressIndex_;
-        COLORREF base = theme::Accent;
+        bool live = processAlive();
+        COLORREF base = live ? theme::Accent
+                             : theme::blend(theme::LayerBg, theme::TextSecondary, 55);
         if (pre)
             base = theme::blend(base, RGB(0, 0, 0), theme::PressAlpha);
         else if (hov)
             base = theme::blend(base, RGB(255, 255, 255), theme::HoverAlpha);
-        // Supersampled: a plain GDI Ellipse left the ball's rim jagged.
+        // Supersampled: a plain GDI Ellipse left the ball's rim jagged. The
+        // old offset "shadow" was a solid dark disc peeking out from behind
+        // the ball - a jagged crescent - so the ball now just gets a hairline
+        // rim, which reads cleanly at any scale.
         c.supersample(ball.inset(-theme::M.px(6)), [&](Canvas& sc) {
-            sc.circle(ball.cx() + theme::M.px(2), ball.cy() + theme::M.px(3),
-                      d / 2 - theme::M.px(2), theme::blend(theme::LayerBg, RGB(0, 0, 0), 90));
             sc.circle(ball.cx(), ball.cy(), d / 2, base);
             sc.circleOutline(ball.cx(), ball.cy(), d / 2 - 1,
-                             theme::blend(theme::Accent, RGB(255, 255, 255), 120), 1);
+                             theme::blend(base, RGB(0, 0, 0), 45), 1);
         });
         c.glyph(Rect{ball.x, ball.cy() - theme::M.px(14), ball.w, theme::M.px(28)},
-                shell::glyphs::kGauge, theme::TextOnAccent, 20);
+                shell::glyphs::kGauge, live ? theme::TextOnAccent : theme::TextPrimary, 20);
     }
 
     ::SelectClipRgn(c.dc(), nullptr);
@@ -430,16 +430,20 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
     c.text(meta, util::ellipsize(c.dc(), metaText, meta.w, theme::fontCaption()), theme::TextTertiary,
            theme::fontCaption(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-    // Status chip: running or idle.
-    bool running = processAlive();
-    std::wstring chipText = running ? T(Str::ServerReady) : T(Str::StatusReady);
-    COLORREF chipBg = running ? theme::Success : theme::Border;
-    COLORREF chipFg = running ? theme::TextOnAccent : theme::TextSecondary;
+    // Status chip: this configuration's own state, not the global one - a
+    // running OTHER configuration must not mark this page as ready.
+    bool mine = processAlive() && cfg.id == runningConfigId_;
+    std::wstring chipText = mine ? T(Str::ServerReady) : T(Str::StatusReady);
+    COLORREF chipBg = mine ? theme::Success : theme::Border;
+    COLORREF chipFg = mine ? theme::TextOnAccent : theme::TextSecondary;
     int chipW = c.textWidth(chipText, theme::fontCaption()) + theme::M.px(18);
     Rect chipRect{name.x, meta.bottom() + theme::M.px(4), chipW, theme::M.px(20)};
     shell::chip(c, chipRect, chipText, chipBg, chipFg);
 
     // ---- action buttons, right aligned in the header ----
+    // "停止" only makes sense on the configuration that is actually running;
+    // every other page shows 启动 (clicking it while something runs asks the
+    // user to stop first, see startConfig).
     int bw = theme::M.px(96);
     int bh = theme::M.px(36);
     int gap = theme::M.px(8);
@@ -455,11 +459,11 @@ void App::paintDetail(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     {
         int idx = (int)hits_.size();
-        addHit(startBtn, running ? Action::Stop : Action::Start, cfg.id);
-        shell::button(c, startBtn, running ? T(Str::Stop) : T(Str::Start),
-                      running ? shell::ButtonStyle::Danger : shell::ButtonStyle::Primary,
+        addHit(startBtn, mine ? Action::Stop : Action::Start, cfg.id);
+        shell::button(c, startBtn, mine ? T(Str::Stop) : T(Str::Start),
+                      mine ? shell::ButtonStyle::Danger : shell::ButtonStyle::Primary,
                       idx == hoverIndex_, idx == pressIndex_, false,
-                      running ? shell::glyphs::kStop : shell::glyphs::kPlay);
+                      mine ? shell::glyphs::kStop : shell::glyphs::kPlay);
     }
     {
         int idx = (int)hits_.size();
@@ -698,10 +702,10 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     // ---- actions ----
     // Widths follow the measured labels (icon + gap + padding + text), so no
-    // caption ever degrades to an ellipsis, and the minimize button is a real
-    // labelled button in the row instead of a small chevron floating over the
-    // header corner, where it collided with the chat button and was easy to
-    // miss.
+    // caption ever degrades to an ellipsis. The row is laid out right to left
+    // from the visible buttons only: with the server stopped, 停止服务 and
+    // 打开对话页 drop out (a stopped server has no chat page), leaving no gap
+    // between the remaining ones.
     int bh = theme::M.px(34);
     auto labelW = [&](const std::wstring& label) {
         // icon + gap + padding, plus slack: an exact fit is still ellipsized,
@@ -709,14 +713,22 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         // than the measurement.
         return theme::M.px(50) + c.textWidth(label, theme::fontBody());
     };
-    Rect chatBtn{header.right() - theme::M.px(18) - labelW(T(Str::OpenInBrowser)),
-                 header.bottom() - theme::M.px(18) - bh, labelW(T(Str::OpenInBrowser)), bh};
-    Rect stopBtn{chatBtn.x - theme::M.px(10) - labelW(T(Str::StopServer)), chatBtn.y,
-                 labelW(T(Str::StopServer)), bh};
-    Rect logBtn{stopBtn.x - theme::M.px(10) - labelW(T(Str::RunLog)), chatBtn.y,
-                labelW(T(Str::RunLog)), bh};
-    Rect minBtn{logBtn.x - theme::M.px(10) - labelW(T(Str::MonitorMinimize)), chatBtn.y,
-                labelW(T(Str::MonitorMinimize)), bh};
+    int rowY = header.bottom() - theme::M.px(18) - bh;
+    int xRight = header.right() - theme::M.px(18);
+    auto place = [&](int w) {
+        Rect r{xRight - w, rowY, w, bh};
+        xRight -= w + theme::M.px(10);
+        return r;
+    };
+    // Only the visible buttons take a slot: with the server down, 停止服务
+    // and 打开对话页 drop out and the remaining pair sits flush right.
+    Rect chatBtn{}, stopBtn{};
+    if (running) {
+        chatBtn = place(labelW(T(Str::OpenInBrowser)));
+        stopBtn = place(labelW(T(Str::StopServer)));
+    }
+    Rect logBtn = place(labelW(T(Str::RunLog)));
+    Rect minBtn = place(labelW(T(Str::MonitorMinimize)));
 
     {
         int idx = (int)hits_.size();
@@ -736,12 +748,10 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         addHit(stopBtn, Action::Stop, cfg.id);
         shell::button(c, stopBtn, T(Str::StopServer), shell::ButtonStyle::Danger,
                       idx == hoverIndex_, idx == pressIndex_, false, shell::glyphs::kStop);
-    }
-    {
-        int idx = (int)hits_.size();
+        int idx2 = (int)hits_.size();
         addHit(chatBtn, Action::OpenChatPage, cfg.id, ready);
         shell::button(c, chatBtn, T(Str::OpenInBrowser), shell::ButtonStyle::Primary,
-                      ready && idx == hoverIndex_, ready && idx == pressIndex_, false,
+                      ready && idx2 == hoverIndex_, ready && idx2 == pressIndex_, false,
                       shell::glyphs::kGlobe);
     }
 
@@ -768,8 +778,10 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     }
     {
         Rect r{x + tileW + gap, y, tileW, tileH};
-        double f = gpu.hasEngineCounter ? monitor_.gpuPercent() / 100.0
-                                        : (gpu.vramValid ? gpu.vramPercent / 100.0 : 0.0);
+        // The ring shows GPU engine utilization of the server process only
+        // (no engine counter or no process -> 0). VRAM stays in the secondary
+        // line: mixing it into the ring made the number and the arc disagree.
+        double f = gpu.hasEngineCounter ? monitor_.gpuPercent() / 100.0 : 0.0;
         std::wstring primary = gpu.hasEngineCounter ? util::format(L"%d%%", monitor_.gpuPercent())
                                                    : std::wstring(T(Str::NotAvailable));
         std::wstring secondary;

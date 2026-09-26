@@ -192,6 +192,8 @@ static const Entry kTable[] = {
     /*LogExternal*/ {L"This server was started outside the launcher, so its console output "
                      L"cannot be captured.",
                      L"该服务是在启动器外部启动的，无法捕获它的控制台输出。"},
+    /*ServerBusy*/ {L"Another configuration is already running - stop it first.",
+                    L"已有配置在运行，请先停止当前服务。"},
     /*CommandPreview*/ {L"Command preview", L"启动命令预览"},
     /*NameDuplicate*/ {L"A configuration with this name already exists.",
                        L"已存在同名配置，请换一个名称。"},

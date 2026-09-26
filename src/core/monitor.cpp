@@ -65,7 +65,8 @@ void Monitor::shutdownPdh() {
     gpuVramCounter_ = nullptr;
 }
 
-bool Monitor::sumCounterArray(void* counter, uint64_t& total, bool percentMode, int& instanceCount) {
+bool Monitor::sumCounterArray(void* counter, uint64_t& total, bool percentMode, int& instanceCount,
+                              const std::wstring& mustContain) {
     if (!counter) return false;
     PDH_HCOUNTER h = (PDH_HCOUNTER)counter;
 
@@ -91,9 +92,16 @@ bool Monitor::sumCounterArray(void* counter, uint64_t& total, bool percentMode, 
 
         // Only count the adapter we chose in the settings view; a machine with
         // both an iGPU and a dGPU would otherwise report a blended number.
+        // An optional instance filter (e.g. "pid_1234_") narrows engine
+        // counters down to a single process, so the GPU number means what the
+        // CPU number next to it means: this server, not the whole desktop.
         if (!gpu_.adapterKey.empty() && items[i].szName) {
             std::wstring name = items[i].szName;
             if (name.find(gpu_.adapterKey) == std::wstring::npos) continue;
+        }
+        if (!mustContain.empty() && items[i].szName) {
+            std::wstring name = items[i].szName;
+            if (name.find(mustContain) == std::wstring::npos) continue;
         }
 
         if (percentMode) {
@@ -239,11 +247,18 @@ void Monitor::sample(DWORD pid) {
         // Wildcard counters resolve their instances on the first successful
         // collect, so a reading may legitimately fail for the first few ticks.
         // Nothing special is needed: keep asking, it starts working on its own.
+        // Engine utilization is filtered to the server's process instances
+        // ("pid_<pid>_..."), matching the process-level CPU figure - the raw
+        // sum also counted desktop composition and every other app, which
+        // made the number jump around and disagree with Task Manager.
         uint64_t sum = 0;
         int instances = 0;
-        if (sumCounterArray(gpuEngineCounter_, sum, true, instances)) {
+        std::wstring pidFilter;
+        if (pid != 0)
+            pidFilter = L"pid_" + std::to_wstring((unsigned long long)pid) + L"_";
+        if (sumCounterArray(gpuEngineCounter_, sum, true, instances, pidFilter)) {
             gpuPercent_ = (int)std::min<uint64_t>(sum, 100);
-            gpu_.hasEngineCounter = true;
+            gpu_.hasEngineCounter = pid != 0;
         }
         uint64_t vram = 0;
         if (sumCounterArray(gpuVramCounter_, vram, false, instances)) {

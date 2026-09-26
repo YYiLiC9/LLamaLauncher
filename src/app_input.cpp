@@ -200,7 +200,11 @@ void App::dispatch(const Hit& hit) {
             break;
 
         case Action::RestoreMonitor:
-            if (processAlive()) setView(View::Running);
+            // The ball is always there; a monitor without a selected config
+            // would snap back to Welcome, so pick the first one in that case.
+            if (!selected() && !store_.configs().empty())
+                selectedId_ = store_.configs().front().id;
+            if (selected()) setView(View::Running);
             break;
 
         case Action::OpenHelp: {
