@@ -874,10 +874,17 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     y = chartCard.bottom() + theme::M.gap;
 
     // ---- process footprint ----
-    // One row only: system RAM and VRAM already have tiles (with rings) right
-    // above - repeating them as meters added nothing. What the rings can NOT
-    // show is how much of the machine the server process itself holds.
-    Rect procCard{x, y, w, theme::M.px(70)};
+    // A truthful breakdown for the mmap era: llama.cpp no longer prints buffer
+    // sizes, and the weights are file-backed pages faulted in lazily. What we
+    // CAN say from outside the process:
+    //   模型权重（文件映射） - committed regions backed by the .gguf files
+    //   运行时（KV + 激活）   - private commit (KV cache, activations, runtime)
+    //   模型（合计）          - resident working set
+    // System RAM / VRAM totals live in the tiles above, so the meters here
+    // compare against system memory.
+    int rows = monitor_.processWorkingSet() ? 3 : 1;
+    Rect procCard{x, y, w, theme::M.px(32) + rows * theme::M.px(24) +
+                             (rows - 1) * theme::M.px(6) + theme::M.px(10)};
     shell::card(c, procCard);
     shell::sectionTitle(c, Rect{procCard.x + theme::M.px(16), procCard.y + theme::M.px(10),
                                 procCard.w - theme::M.px(32), theme::M.px(18)},
@@ -885,11 +892,28 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     int ry = procCard.y + theme::M.px(32);
     int rowH = theme::M.px(24);
+    double ramPool = mem.total ? (double)mem.total : 1.0;
+    auto addRow = [&](const wchar_t* label, const std::wstring& value, double frac,
+                      COLORREF color, wchar_t glyph) {
+        shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32),
+                                rowH},
+                        label, value, frac, color, glyph);
+        ry += rowH + theme::M.px(6);
+    };
+
+    if (rows == 3) {
+        addRow(T(Str::ModelMapped), util::humanBytes(monitor_.mappedModelBytes()),
+               (double)monitor_.mappedModelBytes() / ramPool, kGpuColor,
+               shell::glyphs::kGauge);
+        addRow(T(Str::RuntimeCommit), util::humanBytes(monitor_.processPrivateCommit()),
+               (double)monitor_.processPrivateCommit() / ramPool, kMemColor,
+               shell::glyphs::kMemoryStick);
+    }
     double wsFrac = mem.total ? (double)monitor_.processWorkingSet() / (double)mem.total : 0.0;
-    shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH},
-                    T(Str::MetricModel),
-                    util::humanBytes(monitor_.processWorkingSet()), wsFrac, kCpuColor,
-                    shell::glyphs::kChip);
+    addRow(T(Str::MetricModel),
+           rows == 3 ? util::humanBytes(monitor_.processWorkingSet())
+                     : std::wstring(T(Str::NotAvailable)),
+           wsFrac, kCpuColor, shell::glyphs::kChip);
 
     y = procCard.bottom() + theme::M.gap;
 

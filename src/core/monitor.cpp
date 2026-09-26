@@ -208,7 +208,7 @@ void Monitor::sample(DWORD pid) {
     processVramValid_ = false;
 
     if (pid) {
-        HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+        HANDLE h = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
         if (h) {
             PROCESS_MEMORY_COUNTERS_EX pmc{};
             pmc.cb = sizeof(pmc);
@@ -216,6 +216,42 @@ void Monitor::sample(DWORD pid) {
                 processWorkingSet_ = pmc.WorkingSetSize;
                 processVramBytes_ = pmc.PrivateUsage;
                 processVramValid_ = true;
+            }
+
+            // Model weights under the default mmap load mode are file-backed
+            // pages of the .gguf files. Sum the committed file-mapped regions
+            // whose backing file is a .gguf (all shards). This walk is too
+            // heavy for a 500 ms tick, so it runs every 10th sample (~5 s).
+            // Needs PROCESS_QUERY_INFORMATION, hence the widened open above.
+            ++mappedWalkTick_;
+            if (mappedWalkTick_ % 10 == 1 || mappedModelBytes_ == 0) {
+                uint64_t mapped = 0;
+                MEMORY_BASIC_INFORMATION mbi{};
+                const unsigned char* addr = nullptr;
+                std::map<void*, bool> baseGguf;
+                while (::VirtualQueryEx(h, addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if (mbi.Type == MEM_MAPPED && mbi.State == MEM_COMMIT &&
+                        mbi.AllocationBase) {
+                        void* base = mbi.AllocationBase;
+                        auto it = baseGguf.find(base);
+                        bool isGguf;
+                        if (it == baseGguf.end()) {
+                            wchar_t name[MAX_PATH] = {};
+                            isGguf = ::K32GetMappedFileNameW(h, base, name, MAX_PATH) != 0;
+                            if (isGguf) {
+                                std::wstring n = util::lower(name);
+                                isGguf = n.size() >= 5 &&
+                                         n.compare(n.size() - 5, 5, L".gguf") == 0;
+                            }
+                            baseGguf.emplace(base, isGguf);
+                        } else {
+                            isGguf = it->second;
+                        }
+                        if (isGguf) mapped += mbi.RegionSize;
+                    }
+                    addr = (const unsigned char*)mbi.BaseAddress + mbi.RegionSize;
+                }
+                mappedModelBytes_ = mapped;
             }
             FILETIME creation{}, exit{}, kernel{}, user{};
             if (::GetProcessTimes(h, &creation, &exit, &kernel, &user)) {

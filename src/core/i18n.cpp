@@ -188,6 +188,8 @@ static const Entry kTable[] = {
                          L"服务尚未启动，启动后才能打开对话页。"},
     /*CloseToTray*/ {L"Keep running in the tray when the window is closed",
                      L"关闭窗口时保留到托盘后台运行"},
+    /*ModelMapped*/ {L"Model weights (file-mapped)", L"模型权重（文件映射）"},
+    /*RuntimeCommit*/ {L"Runtime (private commit)", L"运行时（私有提交）"},
     /*TrayOpen*/ {L"Open LlamaLauncher", L"打开 LlamaLauncher"},
     /*TrayQuit*/ {L"Quit", L"退出"},
     /*MonitorMinimize*/ {L"Minimize", L"最小化"},

@@ -604,6 +604,7 @@ bool App::startConfig(const std::wstring& id) {
     externalPid_ = 0;
 
     logTail_.clear();
+
     runStarted_ = util::nowSeconds();
     runningConfigId_ = id;
     selectedId_ = id;
@@ -629,6 +630,7 @@ void App::stopServer() {
         externalPid_ = 0;
     }
     logTail_.clear();
+
     runningConfigId_.clear();
     // The run is over, so the resource view has nothing left to show - fall
     // back to the selected configuration (or the welcome screen).

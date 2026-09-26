@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include <deque>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,13 @@ public:
     int processCpuPercent() const { return processCpuPercent_; }
     uint64_t processVramBytes() const { return processVramBytes_; }
     bool processVramValid() const { return processVramValid_; }
+    // Private commit of the server process (KV cache + activations + runtime);
+    // with mmap'd weights this excludes the model file pages.
+    uint64_t processPrivateCommit() const { return processVramBytes_; }
+    // Bytes of committed file-mapped regions backed by .gguf files (the model
+    // weights, lazily faulted in under the default mmap load mode). Rescanned
+    // every ~5th sample, not every tick.
+    uint64_t mappedModelBytes() const { return mappedModelBytes_; }
 
     // Rolling history for the charts, newest last.
     const std::deque<float>& cpuHistory() const { return cpuHistory_; }
@@ -98,6 +106,8 @@ private:
     int processCpuPercent_ = 0;
     uint64_t processVramBytes_ = 0;
     bool processVramValid_ = false;
+    uint64_t mappedModelBytes_ = 0;
+    int mappedWalkTick_ = 0;
 
     std::deque<float> cpuHistory_;
     std::deque<float> gpuHistory_;
