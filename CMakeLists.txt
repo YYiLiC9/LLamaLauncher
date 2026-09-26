@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(LlamaLauncher
     VERSION 1.0.0
     DESCRIPTION "A lightweight native Win11-style GUI launcher for llama.cpp"
-    LANGUAGES CXX)
+    LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,7 @@ add_executable(LlamaLauncher WIN32
     src/app.cpp
     src/app_paint.cpp
     src/app_input.cpp
+    res/app.rc
 
     src/core/util.cpp
     src/core/paths.cpp

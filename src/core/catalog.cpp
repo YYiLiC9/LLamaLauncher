@@ -114,13 +114,12 @@ static const std::vector<Spec>& buildTable() {
          L"Flash attention. Faster and lighter on memory.",
          L"Flash Attention，速度更快且更省内存。"},
 
-        {L"--mlock", nullptr, nullptr, Group::Performance, true, false, false, false, L"", L"",
-         L"Keep the model locked in RAM.",
-         L"将模型锁定在内存中，避免换出。"},
-
-        {L"--no-mmap", nullptr, nullptr, Group::Performance, true, false, false, false, L"", L"",
-         L"Load the model fully instead of memory mapping it.",
-         L"完整加载模型，而不是内存映射。"},
+        // --mlock / --no-mmap are gone from llama.cpp; their replacement is a
+        // single tri-state-plus switch covering the whole loading strategy.
+        {L"-lm", L"--load-mode", nullptr, Group::Performance, false, false, false, false, L"",
+         L"auto|mmap|mlock|mmap+mlock|dio|none",
+         L"Model loading mode (replaces the old --mlock / --no-mmap).",
+         L"模型加载模式（替代旧的 --mlock / --no-mmap）。"},
 
         // ------------------------------------------------------------------ GPU
         {L"-ngl", L"--n-gpu-layers", nullptr, Group::Gpu, false, true, false, false, L"99", L"99",

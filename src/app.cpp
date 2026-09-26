@@ -84,8 +84,15 @@ bool App::init(HINSTANCE inst) {
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;   // the whole client area is painted by hand
     wc.lpszClassName = kWindowClass;
-    wc.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
-    wc.hIconSm = wc.hIcon;
+    // The compiled-in resource icon (res/app.rc, id 1) for the title bar, the
+    // taskbar and Alt-Tab; fall back to the generic one if the resource is
+    // somehow missing.
+    wc.hIcon = ::LoadIconW(inst_, MAKEINTRESOURCEW(1));
+    if (!wc.hIcon) wc.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIconSm = (HICON)::LoadImageW(inst_, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                     ::GetSystemMetrics(SM_CXSMICON),
+                                     ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+    if (!wc.hIconSm) wc.hIconSm = wc.hIcon;
     if (!::RegisterClassExW(&wc)) return false;
 
     // The search box superclasses the standard EDIT control. A hand-rolled
@@ -131,6 +138,21 @@ bool App::init(HINSTANCE inst) {
         ::SetWindowPos(hwnd_, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     }
     onSize();
+
+    // Notification-area icon (always on): it restores a window hidden to the
+    // tray on close, and offers a quit path while the title bar is gone.
+    ::memset(&tray_, 0, sizeof(tray_));
+    tray_.cbSize = sizeof(tray_);
+    tray_.hWnd = hwnd_;
+    tray_.uID = 1;
+    tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    tray_.uCallbackMessage = kTrayMessage;
+    tray_.hIcon = (HICON)::LoadImageW(inst_, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                      ::GetSystemMetrics(SM_CXSMICON),
+                                      ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+    if (!tray_.hIcon) tray_.hIcon = wc.hIcon;
+    ::lstrcpynW(tray_.szTip, L"LlamaLauncher", (int)_countof(tray_.szTip));
+    trayAdded_ = ::Shell_NotifyIconW(NIM_ADD, &tray_) != FALSE;
 
     // A server left over from a previous run is adopted so the running view
     // still reports something useful.
@@ -356,8 +378,52 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             break;
 
+        case WM_APP + 0x2C5: {   // kTrayMessage - notification-area callback
+            if (lp == WM_LBUTTONUP || lp == NIN_SELECT) {
+                // Left click: bring the window back from the tray.
+                ::ShowWindow(hwnd, SW_SHOW);
+                if (::IsIconic(hwnd)) ::ShowWindow(hwnd, SW_RESTORE);
+                ::SetForegroundWindow(hwnd);
+            } else if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) {
+                HMENU menu = ::CreatePopupMenu();
+                ::AppendMenuW(menu, MF_STRING, 1, T(Str::TrayOpen));
+                ::AppendMenuW(menu, MF_STRING, 2, T(Str::TrayQuit));
+                // The menu needs its owner foreground or it will not dismiss
+                // on an outside click.
+                ::SetForegroundWindow(hwnd);
+                POINT pt{};
+                ::GetCursorPos(&pt);
+                int cmd = ::TrackPopupMenu(menu,
+                                           TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                           pt.x, pt.y, 0, hwnd, nullptr);
+                ::DestroyMenu(menu);
+                if (cmd == 1) {
+                    ::ShowWindow(hwnd, SW_SHOW);
+                    if (::IsIconic(hwnd)) ::ShowWindow(hwnd, SW_RESTORE);
+                    ::SetForegroundWindow(hwnd);
+                } else if (cmd == 2) {
+                    ::DestroyWindow(hwnd);
+                }
+            }
+            return 0;
+        }
+
+        case WM_CLOSE:
+            // The tray setting turns the X button into "hide and keep
+            // running" - a live server survives a stray click on X. The tray
+            // icon's 退出 menu item calls DestroyWindow directly.
+            if (self->store_.settings().closeToTray) {
+                ::ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            break;
+
         case WM_DESTROY:
             ::KillTimer(hwnd, kTimerId);
+            if (self->trayAdded_) {
+                ::Shell_NotifyIconW(NIM_DELETE, &self->tray_);
+                self->trayAdded_ = false;
+            }
             self->server_.stop();
             // Shut the embedded browser down explicitly so its helper processes
             // do not outlive the window.

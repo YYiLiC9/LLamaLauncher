@@ -342,6 +342,7 @@ public:
         backupEnabled_ = store.settings().backupEnabled;
         backupDir_ = store.settings().backupDir.empty() ? paths::backupsDir()
                                                         : store.settings().backupDir;
+        closeToTray_ = store.settings().closeToTray;
     }
 
 protected:
@@ -362,13 +363,13 @@ protected:
     }
     Rect llamaField() const {
         int w = width() - theme::M.px(118);
-        return Rect{left(), bodyTop() + theme::M.px(232), w, theme::M.px(30)};
+        return Rect{left(), bodyTop() + theme::M.px(278), w, theme::M.px(30)};
     }
     Rect backupField() const {
         // Sits just under the enable switch. It used to be pinned far below it,
         // which left a dead band in the middle of the backup section.
         int w = width() - theme::M.px(118);
-        return Rect{left(), bodyTop() + theme::M.px(400), w, theme::M.px(30)};
+        return Rect{left(), bodyTop() + theme::M.px(446), w, theme::M.px(30)};
     }
 
     void onLayout() override {
@@ -438,7 +439,19 @@ protected:
         segmented(c, tseg, {T(Str::ThemeSystem), T(Str::ThemeLight), T(Str::ThemeDark)},
                   (int)themeMode_, themeHover(), themePress());
 
-        int divY = y + theme::M.px(162);
+        // Row 3: tray behaviour. Closing the window can hide it to the tray
+        // instead of quitting, so a running server survives a stray click on X.
+        Rect trayRow{x, y + theme::M.px(160), w, theme::M.px(22)};
+        Rect traySwitch{trayRow.x, trayRow.y, theme::M.px(40), trayRow.h};
+        addHit(traySwitch, ID_CLOSE_TRAY);
+        toggleSwitch(c, traySwitch, closeToTray_, isHovered(ID_CLOSE_TRAY),
+                     isPressed(ID_CLOSE_TRAY));
+        c.text(Rect{traySwitch.right() + theme::M.px(10), trayRow.y,
+                    w - theme::M.px(60), trayRow.h},
+               T(Str::CloseToTray), closeToTray_ ? theme::TextPrimary : theme::TextSecondary,
+               theme::fontBody(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        int divY = y + theme::M.px(208);
         c.line(x, divY, x + w, divY, theme::Divider);
 
         // ---- llama.cpp location ----
@@ -617,6 +630,10 @@ protected:
                 backupEnabled_ = !backupEnabled_;
                 break;
 
+            case ID_CLOSE_TRAY:
+                closeToTray_ = !closeToTray_;
+                break;
+
             case ID_BACKUP_ALL: {
                 readControls();
                 store_.settings().backupEnabled = backupEnabled_;
@@ -635,6 +652,7 @@ protected:
                                                                                 : L"system";
                 store_.settings().backupEnabled = backupEnabled_;
                 store_.settings().backupDir = backupDir_;
+                store_.settings().closeToTray = closeToTray_;
                 store_.saveSettings();
                 close(DialogResult::Ok);
                 return;
@@ -696,6 +714,7 @@ private:
     std::wstring llamaDir_;
     bool backupEnabled_ = true;
     std::wstring backupDir_;
+    bool closeToTray_ = false;
     std::wstring statusText_;
     bool statusOk_ = false;
     HWND llamaEdit_ = nullptr;
@@ -707,7 +726,7 @@ private:
 bool settingsDialog(HWND owner, store::Store& store, bool& languageChanged) {
     Lang before = i18n::current();
     SettingsDialog dlg(store);
-    bool ok = dlg.run(owner, T(Str::Settings), theme::M.px(640), theme::M.px(580));
+    bool ok = dlg.run(owner, T(Str::Settings), theme::M.px(640), theme::M.px(624));
     languageChanged = i18n::current() != before;
     return ok;
 }
@@ -2393,18 +2412,47 @@ protected:
         c.strokeRound(area, theme::M.radiusSmall, theme::Border);
 
         // The page split must come from the real capacity of the console area.
-        // The constructor's constant guess (40 lines) ignored DPI and resizing:
-        // on a 175% display one page only fits ~24 lines, so every page skipped
-        // its tail and those log lines could never be seen.
         // Live mode pulls the current lines; snapshot mode uses the stored copy.
+        // Lines wrap instead of being chopped by an ellipsis, so pages are
+        // slices of the *rendered height*: every entry is measured with the
+        // same flags the draw uses, and the page boundary lands between
+        // entries, never through one.
         const std::vector<std::wstring> lines =
             provider_ ? provider_() : lines_;
-        int lineH = theme::M.px(18);
-        int perPage = std::max(1, (area.h - theme::M.px(16)) / lineH);
-        int pages = std::max(1, (int)((lines.size() + perPage - 1) / perPage));
+        Rect inner = area.inset(theme::M.px(8));
+        int wrapW = std::max(1, inner.w);
+
+        // Measurement cache: the log can hold thousands of lines and this runs
+        // on every paint (the live timer). Recompute only when the content or
+        // the width actually changed. The console is monospaced, so wrapping
+        // is a plain per-character chunk - unlike DT_WORDBREAK it also breaks
+        // the giant unbroken tokens (paths, base64, LLLLLL...) that llama.cpp
+        // loves to print, which was the whole point of this feature.
+        if (wrapW != measuredW_ || lines.size() != measuredCount_) {
+            HGDIOBJ oldMono = ::SelectObject(c.dc(), theme::fontMono());
+            SIZE sz{};
+            ::GetTextExtentPoint32W(c.dc(), L"MMMMM", 5, &sz);
+            int charW = std::max(1, (int)(sz.cx / 5));
+            int cpl = std::max(1, wrapW / charW);
+            measuredHeights_.assign(lines.size(), 0);
+            int total = 0;
+            for (size_t i = 0; i < lines.size(); ++i) {
+                int rows = (int)((lines[i].size() + cpl - 1) / cpl);
+                int h = std::max(rows, 1) * theme::M.px(18) + theme::M.px(2);
+                measuredHeights_[i] = h;
+                total += h;
+            }
+            ::SelectObject(c.dc(), oldMono);
+            measuredTotal_ = total;
+            measuredW_ = wrapW;
+            measuredCount_ = lines.size();
+            measuredCpl_ = cpl;
+        }
+        int pageH = std::max(1, inner.h);
+        int pages = std::max(1, (measuredTotal_ + pageH - 1) / pageH);
         // Sync unconditionally: guarding on "pages changed" left page_ at its
         // -1 sentinel forever when the log never grew past one page, and the
-        // start offset then collapsed to lines.size() - a blank console that
+        // start offset then collapsed past the end - a blank console that
         // only recovered after the user clicked a page button.
         // While the user is already reading the last page, stay on the tail as
         // new lines arrive; otherwise keep the page they scrolled to.
@@ -2414,13 +2462,16 @@ protected:
             page_ = pages_ - 1;
         else
             page_ = std::clamp(page_, 0, pages_ - 1);
-        size_t start = (size_t)page_ * (size_t)perPage;
-        if (start > lines.size()) start = lines.size();
+        long long startH = (long long)page_ * pageH;
 
-        Rect inner = area.inset(theme::M.px(8));
         int shown = 0;
-        for (size_t i = start; i < lines.size() && shown < perPage; ++i, ++shown) {
-            Rect lr{inner.x, inner.y + shown * lineH, inner.w, lineH};
+        int acc = 0;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            int h = measuredHeights_[i];
+            int top = acc - (int)startH;
+            acc += h;
+            if (top + h <= 0) continue;         // entirely above this page
+            if (top >= inner.h) break;          // entirely below it
             COLORREF col = theme::TextSecondary;
             std::wstring low = util::lower(lines[i]);
             if (util::contains(low, L"error") || util::contains(low, L"failed"))
@@ -2428,9 +2479,18 @@ protected:
             else if (util::contains(low, L"warn")) col = theme::Warning;
             else if (util::contains(low, L"listening") || util::contains(low, L"server is"))
                 col = theme::Success;
-            c.text(lr, util::ellipsize(c.dc(), lines[i], lr.w, theme::fontMono()), col, theme::fontMono(),
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+            // Draw the entry chunk by chunk (mono grid): one chunk per row.
+            const std::wstring& s = lines[i];
+            int rows = (int)((s.size() + measuredCpl_ - 1) / measuredCpl_);
+            for (int cj = 0; cj < rows; ++cj) {
+                std::wstring chunk = s.substr((size_t)cj * measuredCpl_, measuredCpl_);
+                Rect lr{inner.x, inner.y + top + cj * theme::M.px(18), inner.w, theme::M.px(18)};
+                c.text(lr, chunk, col, theme::fontMono(),
+                       DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+            }
+            ++shown;
         }
+        (void)shown;
         if (lines.empty()) {
             c.textBlock(inner, emptyHint_.empty() ? T(Str::LogEmpty) : emptyHint_,
                         theme::TextTertiary, theme::fontBody());
@@ -2472,6 +2532,12 @@ protected:
 
 private:
     std::vector<std::wstring> lines_;
+    // Wrapped-height cache for the console view (see onPaint).
+    std::vector<int> measuredHeights_;
+    int measuredTotal_ = 0;
+    int measuredW_ = 0;
+    int measuredCpl_ = 1;
+    size_t measuredCount_ = (size_t)-1;
     std::function<std::vector<std::wstring>()> provider_;
     std::wstring emptyHint_;
     int page_ = 0;

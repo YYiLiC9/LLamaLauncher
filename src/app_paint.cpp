@@ -873,11 +873,11 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     y = chartCard.bottom() + theme::M.gap;
 
-    // ---- process footprint rows ----
-    // Title 10..28, then three 24px rows separated by 4px: 32+24*3+4*2+8 =
-    // 124 total. The old 36px top offset + 26px rows overflowed the 122px
-    // card and sat visually off-centre.
-    Rect procCard{x, y, w, theme::M.px(124)};
+    // ---- process footprint ----
+    // One row only: system RAM and VRAM already have tiles (with rings) right
+    // above - repeating them as meters added nothing. What the rings can NOT
+    // show is how much of the machine the server process itself holds.
+    Rect procCard{x, y, w, theme::M.px(70)};
     shell::card(c, procCard);
     shell::sectionTitle(c, Rect{procCard.x + theme::M.px(16), procCard.y + theme::M.px(10),
                                 procCard.w - theme::M.px(32), theme::M.px(18)},
@@ -885,24 +885,6 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     int ry = procCard.y + theme::M.px(32);
     int rowH = theme::M.px(24);
-    double memFrac = mem.total ? (double)mem.used / (double)mem.total : 0.0;
-    shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH},
-                    T(Str::MetricMemory),
-                    util::format(L"%s / %s", util::humanBytes(mem.used).c_str(),
-                                 util::humanBytes(mem.total).c_str()),
-                    memFrac, kMemColor, shell::glyphs::kMemoryStick);
-    ry += rowH + theme::M.px(6);
-
-    double vramFrac = gpu.vramTotal ? (double)gpu.vramUsed / (double)gpu.vramTotal : 0.0;
-    shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH},
-                    T(Str::MetricVram),
-                    gpu.vramValid
-                        ? util::format(L"%s / %s", util::humanBytes(gpu.vramUsed).c_str(),
-                                       util::humanBytes(gpu.vramTotal).c_str())
-                        : std::wstring(T(Str::NotAvailable)),
-                    vramFrac, kGpuColor, shell::glyphs::kGauge);
-    ry += rowH + theme::M.px(6);
-
     double wsFrac = mem.total ? (double)monitor_.processWorkingSet() / (double)mem.total : 0.0;
     shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH},
                     T(Str::MetricModel),

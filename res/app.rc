@@ -1,0 +1,5 @@
+// res/app.rc - application resources.
+// Icon id 1: referenced by the window class (LoadIconW(inst_, MAKEINTRESOURCEW(1)))
+// and by the tray icon, so the taskbar, title bar and notification area all
+// show the same mark.
+1 ICON "app.ico"

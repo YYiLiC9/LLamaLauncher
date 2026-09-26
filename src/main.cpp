@@ -26,6 +26,9 @@ bool claimSingleInstance() {
 
     HWND existing = ::FindWindowW(app::kWindowClass, nullptr);
     if (existing) {
+        // The window may be hidden in the tray (close-to-tray setting) rather
+        // than merely minimised, so show it unconditionally before raising it.
+        ::ShowWindow(existing, SW_SHOW);
         if (::IsIconic(existing)) ::ShowWindow(existing, SW_RESTORE);
         ::SetForegroundWindow(existing);
     }

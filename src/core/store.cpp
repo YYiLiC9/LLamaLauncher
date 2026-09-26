@@ -75,6 +75,7 @@ bool Store::load() {
             settings_.backupDir = root.str(L"backup_dir");
             settings_.language = root.str(L"language", L"zh");
             settings_.theme = root.str(L"theme", L"system");
+            settings_.closeToTray = root.boolean(L"close_to_tray", false);
         }
     }
     if (settings_.language.empty()) settings_.language = L"zh";
@@ -121,6 +122,11 @@ bool Store::loadConfigs() {
                 p.custom = item.boolean(L"custom", false);
                 p.enabled = item.boolean(L"enabled", true);
                 if (p.flag.empty()) continue;
+                // Parameters removed from the catalog (superseded by newer
+                // llama.cpp flags) would linger in old configs as zombie rows;
+                // --mlock / --no-mmap became --load-mode.
+                if (util::iequals(p.flag, L"--mlock") || util::iequals(p.flag, L"--no-mmap"))
+                    continue;
                 cfg.params.push_back(std::move(p));
             }
         }
@@ -237,6 +243,7 @@ bool Store::saveSettings() {
     root.set(L"llama_exe", settings_.llamaExe);
     root.set(L"backup_enabled", settings_.backupEnabled ? L"true" : L"false");
     root.set(L"backup_dir", settings_.backupDir);
+    root.set(L"close_to_tray", settings_.closeToTray ? L"true" : L"false");
     if (!util::writeTextFile(paths::settingsFile(), yaml::dump(root))) return false;
 
     if (!settings_.llamaDir.empty()) {

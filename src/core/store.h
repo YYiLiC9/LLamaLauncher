@@ -45,6 +45,7 @@ struct Settings {
     std::wstring backupDir;       // empty means <dataRoot>\backups
     std::wstring language;        // "zh" or "en"
     std::wstring theme;           // "system" (default), "light" or "dark"
+    bool closeToTray = false;     // closing the window hides to the tray instead of exiting
 };
 
 // Result of an auto-detection sweep, so the settings dialog can show what was

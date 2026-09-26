@@ -155,6 +155,9 @@ enum class Str {
     Reload,
     // The chat page was asked for while no llama-server is running.
     ChatNeedsServer,
+    CloseToTray,
+    TrayOpen,
+    TrayQuit,
     // Resource monitor: shrink-to-ball button; empty-log placeholders.
     MonitorMinimize,
     LogEmpty,

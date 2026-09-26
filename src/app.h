@@ -2,6 +2,7 @@
 #pragma once
 
 #include <windows.h>
+#include <shellapi.h>   // NOTIFYICONDATAW / Shell_NotifyIconW
 
 #include <string>
 #include <vector>
@@ -170,6 +171,10 @@ private:
 
     proc::ServerProcess server_;
     monitor::Monitor monitor_;
+    // Notification-area icon. Always present: it is the way back in when the
+    // window is hidden to the tray on close, and a quit affordance otherwise.
+    NOTIFYICONDATAW tray_{};
+    bool trayAdded_ = false;
     // Configuration the running server belongs to. Empty while an adopted
     // external llama-server runs (its origin is unknown) or nothing runs.
     std::wstring runningConfigId_;
@@ -205,5 +210,8 @@ private:
 constexpr wchar_t kWindowClass[] = L"LlamaLauncherMainWindow";
 constexpr int kBaseWindowW = 1180;
 constexpr int kBaseWindowH = 760;
+// Tray callback message. Distinct from the webview's init message so the two
+// custom message streams can never collide.
+constexpr UINT kTrayMessage = WM_APP + 0x2C5;
 
 }  // namespace app

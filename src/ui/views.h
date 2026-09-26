@@ -37,6 +37,7 @@ enum : int {
     ID_THEME_SYSTEM = 15,
     ID_THEME_LIGHT = 16,
     ID_THEME_DARK = 17,
+    ID_CLOSE_TRAY = 18,
     ID_EXPORT_ROW_FIRST = 100,
     // The export list addresses configurations as ID_EXPORT_ROW_FIRST + index.
     // It starts well clear of the plain ids above so the two spaces can never
