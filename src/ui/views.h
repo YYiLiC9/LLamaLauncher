@@ -111,8 +111,18 @@ public:
     explicit LogViewer(std::vector<std::wstring> lines);
     bool show(HWND owner, const std::wstring& title);
 
+    // Live mode: the dialog pulls the current lines on every paint instead of
+    // showing the snapshot taken at construction, so a log opened early fills
+    // in as the server prints. The empty hint replaces the list when empty.
+    void setProvider(std::function<std::vector<std::wstring>()> provider) {
+        provider_ = std::move(provider);
+    }
+    void setEmptyHint(const std::wstring& hint) { emptyHint_ = hint; }
+
 private:
     std::vector<std::wstring> lines_;
+    std::function<std::vector<std::wstring>()> provider_;
+    std::wstring emptyHint_;
 };
 
 }  // namespace views

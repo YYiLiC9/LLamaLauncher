@@ -95,6 +95,12 @@ public:
     void sparkline(const Rect& r, const std::vector<float>& samples, COLORREF lineColor,
                    COLORREF fillColor, double maxValue = 100.0);
 
+    // Draws `draw` antialiased: the region is rendered at 4x in an offscreen
+    // buffer (on top of the content already there) and scaled back down, which
+    // is how GDI-only shapes - circles, arcs, polylines - lose their jaggies.
+    // The lambda draws with the canvas' ordinary absolute coordinates.
+    void supersample(const Rect& region, const std::function<void(Canvas&)>& draw);
+
     // A monochrome glyph from the Segoe Fluent Icons / Segoe MDL2 font, which
     // is how the toolbar icons are drawn without any image assets.
     void glyph(const Rect& r, wchar_t code, COLORREF color, int sizePt);

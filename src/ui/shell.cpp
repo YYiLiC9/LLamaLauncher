@@ -184,25 +184,76 @@ void Canvas::circleOutline(int cx, int cy, int radius, COLORREF color, int width
     ::DeleteObject(pen);
 }
 
+void Canvas::supersample(const Rect& region, const std::function<void(Canvas&)>& draw) {
+    constexpr int S = 4;
+    const int w = region.w, h = region.h;
+    if (w <= 0 || h <= 0 || !draw) return;
+
+    HDC hi = ::CreateCompatibleDC(dc_);
+    HBITMAP bmp = ::CreateCompatibleBitmap(dc_, w * S, h * S);
+    HGDIOBJ oldBmp = ::SelectObject(hi, bmp);
+
+    // Start from the content already on the canvas, so the shapes blend into
+    // their real background instead of an arbitrary fill colour.
+    ::SetStretchBltMode(hi, HALFTONE);
+    ::SetBrushOrgEx(hi, 0, 0, nullptr);
+    ::StretchBlt(hi, 0, 0, w * S, h * S, dc_, region.x, region.y, w, h, SRCCOPY);
+
+    // The world transform (and only that) must live inside this save block:
+    // window/viewport org and extents persist in the DC after switching back
+    // to GM_COMPATIBLE, and a leftover mapping makes the final StretchBlt read
+    // its source from outside the bitmap - the whole draw silently vanishes.
+    int saved = ::SaveDC(hi);
+
+    // Viewport scaling, classic MM_ANISOTROPIC style: the lambda keeps drawing
+    // in absolute coordinates, and window/viewport org+ext map them onto the
+    // S-times larger buffer. (GM_ADVANCED world transforms proved unreliable
+    // here - the shapes came out at a quarter size or not at all.)
+    ::SetMapMode(hi, MM_ANISOTROPIC);
+    ::SetWindowOrgEx(hi, region.x, region.y, nullptr);
+    ::SetWindowExtEx(hi, w, h, nullptr);
+    ::SetViewportOrgEx(hi, 0, 0, nullptr);
+    ::SetViewportExtEx(hi, w * S, h * S, nullptr);
+
+    Canvas sub(hi);
+    draw(sub);
+
+    ::RestoreDC(hi, saved);
+    ::SetStretchBltMode(dc_, HALFTONE);
+    ::SetBrushOrgEx(dc_, 0, 0, nullptr);
+    ::StretchBlt(dc_, region.x, region.y, w, h, hi, 0, 0, w * S, h * S, SRCCOPY);
+
+    ::SelectObject(hi, oldBmp);
+    ::DeleteObject(bmp);
+    ::DeleteDC(hi);
+}
+
 void Canvas::ring(int cx, int cy, int radius, int thickness, double fraction,
                   COLORREF color, COLORREF track) {
     fraction = std::clamp(fraction, 0.0, 1.0);
     // Draw the ring as a thick arc. GDI angles run counter-clockwise from 3
     // o'clock, so we start at the top (90 degrees) and sweep clockwise.
-    auto arc = [&](double startFrac, double endFrac, COLORREF col) {
-        if (endFrac <= startFrac) return;
-        const double startDeg = 90.0 - startFrac * 360.0;
-        const double sweepDeg = -(endFrac - startFrac) * 360.0;
-        HPEN pen = ::CreatePen(PS_SOLID, thickness, col);
-        HGDIOBJ op = ::SelectObject(dc_, pen);
-        HGDIOBJ ob = ::SelectObject(dc_, ::GetStockObject(NULL_BRUSH));
-        ::AngleArc(dc_, cx, cy, radius, (float)startDeg, (float)sweepDeg);
-        ::SelectObject(dc_, op);
-        ::SelectObject(dc_, ob);
-        ::DeleteObject(pen);
-    };
-    arc(0.0, 1.0, track);
-    if (fraction > 0.0005) arc(0.0, fraction, color);
+    // Supersampled: a plain AngleArc at 1x is visibly jagged on the monitor
+    // rings, which are the most looked-at curves in the app.
+    int pad = thickness + 2;
+    supersample(Rect{cx - radius - pad, cy - radius - pad, 2 * (radius + pad),
+                     2 * (radius + pad)},
+                [&](Canvas& c) {
+                    auto arc = [&](double startFrac, double endFrac, COLORREF col) {
+                        if (endFrac <= startFrac) return;
+                        const double startDeg = 90.0 - startFrac * 360.0;
+                        const double sweepDeg = -(endFrac - startFrac) * 360.0;
+                        HPEN pen = ::CreatePen(PS_SOLID, thickness, col);
+                        HGDIOBJ op = ::SelectObject(c.dc(), pen);
+                        HGDIOBJ ob = ::SelectObject(c.dc(), ::GetStockObject(NULL_BRUSH));
+                        ::AngleArc(c.dc(), cx, cy, radius, (float)startDeg, (float)sweepDeg);
+                        ::SelectObject(c.dc(), op);
+                        ::SelectObject(c.dc(), ob);
+                        ::DeleteObject(pen);
+                    };
+                    arc(0.0, 1.0, track);
+                    if (fraction > 0.0005) arc(0.0, fraction, color);
+                });
 }
 
 void Canvas::meter(const Rect& r, double fraction, COLORREF fillColor, COLORREF track) {
@@ -232,28 +283,31 @@ void Canvas::sparkline(const Rect& r, const std::vector<float>& samples, COLORRE
         pts.push_back(POINT{x, y});
     }
 
-    // Filled area under the curve.
-    std::vector<POINT> poly;
-    poly.reserve(pts.size() + 2);
-    poly.push_back(POINT{r.x, r.bottom() - 1});
-    for (const POINT& p : pts) poly.push_back(p);
-    poly.push_back(POINT{r.right() - 1, r.bottom() - 1});
+    // Filled area under the curve, then the line - both supersampled, since a
+    // 1x Polyline reads as a jagged mountain range on the resource charts.
+    supersample(Rect{r.x - 2, r.y - 2, r.w + 4, r.h + 4}, [&](Canvas& c) {
+        std::vector<POINT> poly;
+        poly.reserve(pts.size() + 2);
+        poly.push_back(POINT{r.x, r.bottom() - 1});
+        for (const POINT& p : pts) poly.push_back(p);
+        poly.push_back(POINT{r.right() - 1, r.bottom() - 1});
 
-    HBRUSH brush = ::CreateSolidBrush(fillColor);
-    HPEN pen = ::CreatePen(PS_SOLID, 1, fillColor);
-    HGDIOBJ ob = ::SelectObject(dc_, brush);
-    HGDIOBJ op = ::SelectObject(dc_, pen);
-    ::Polygon(dc_, poly.data(), (int)poly.size());
-    ::SelectObject(dc_, ob);
-    ::SelectObject(dc_, op);
-    ::DeleteObject(brush);
-    ::DeleteObject(pen);
+        HBRUSH brush = ::CreateSolidBrush(fillColor);
+        HPEN pen = ::CreatePen(PS_SOLID, 1, fillColor);
+        HGDIOBJ ob = ::SelectObject(c.dc(), brush);
+        HGDIOBJ op = ::SelectObject(c.dc(), pen);
+        ::Polygon(c.dc(), poly.data(), (int)poly.size());
+        ::SelectObject(c.dc(), ob);
+        ::SelectObject(c.dc(), op);
+        ::DeleteObject(brush);
+        ::DeleteObject(pen);
 
-    HPEN linePen = ::CreatePen(PS_SOLID, std::max(1, theme::M.px(2)), lineColor);
-    HGDIOBJ olp = ::SelectObject(dc_, linePen);
-    ::Polyline(dc_, pts.data(), (int)pts.size());
-    ::SelectObject(dc_, olp);
-    ::DeleteObject(linePen);
+        HPEN linePen = ::CreatePen(PS_SOLID, std::max(1, theme::M.px(2)), lineColor);
+        HGDIOBJ olp = ::SelectObject(c.dc(), linePen);
+        ::Polyline(c.dc(), pts.data(), (int)pts.size());
+        ::SelectObject(c.dc(), olp);
+        ::DeleteObject(linePen);
+    });
 }
 
 void Canvas::glyph(const Rect& r, wchar_t code, COLORREF color, int sizePt) {

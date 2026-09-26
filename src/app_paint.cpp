@@ -326,16 +326,19 @@ void App::paintContent(Canvas& c, const Frame& f) {
         addHit(ball, Action::RestoreMonitor);
         bool hov = idx == hoverIndex_;
         bool pre = idx == pressIndex_;
-        int cx = ball.cx(), cy = ball.cy(), r = d / 2;
         COLORREF base = theme::Accent;
         if (pre)
             base = theme::blend(base, RGB(0, 0, 0), theme::PressAlpha);
         else if (hov)
             base = theme::blend(base, RGB(255, 255, 255), theme::HoverAlpha);
-        c.circle(cx + theme::M.px(2), cy + theme::M.px(3), r - theme::M.px(2),
-                 theme::blend(theme::LayerBg, RGB(0, 0, 0), 90));
-        c.circle(cx, cy, r, base);
-        c.circleOutline(cx, cy, r - 1, theme::blend(theme::Accent, RGB(255, 255, 255), 120), 1);
+        // Supersampled: a plain GDI Ellipse left the ball's rim jagged.
+        c.supersample(ball.inset(-theme::M.px(6)), [&](Canvas& sc) {
+            sc.circle(ball.cx() + theme::M.px(2), ball.cy() + theme::M.px(3),
+                      d / 2 - theme::M.px(2), theme::blend(theme::LayerBg, RGB(0, 0, 0), 90));
+            sc.circle(ball.cx(), ball.cy(), d / 2, base);
+            sc.circleOutline(ball.cx(), ball.cy(), d / 2 - 1,
+                             theme::blend(theme::Accent, RGB(255, 255, 255), 120), 1);
+        });
         c.glyph(Rect{ball.x, ball.cy() - theme::M.px(14), ball.w, theme::M.px(28)},
                 shell::glyphs::kGauge, theme::TextOnAccent, 20);
     }
@@ -693,24 +696,35 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     c.text(infoRect, info, theme::TextTertiary, theme::fontCaption(),
            DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-    // Minimize: shrink the monitor to the corner ball (see paintContent), so
-    // the live view does not have to own the screen while the server runs.
-    Rect minBtn{header.right() - theme::M.px(18) - theme::M.px(34), header.y + theme::M.px(14),
-                theme::M.px(34), theme::M.px(34)};
+    // ---- actions ----
+    // Widths follow the measured labels (icon + gap + padding + text), so no
+    // caption ever degrades to an ellipsis, and the minimize button is a real
+    // labelled button in the row instead of a small chevron floating over the
+    // header corner, where it collided with the chat button and was easy to
+    // miss.
+    int bh = theme::M.px(34);
+    auto labelW = [&](const std::wstring& label) {
+        // icon + gap + padding, plus slack: an exact fit is still ellipsized,
+        // because the text area inside the button comes out a hair narrower
+        // than the measurement.
+        return theme::M.px(50) + c.textWidth(label, theme::fontBody());
+    };
+    Rect chatBtn{header.right() - theme::M.px(18) - labelW(T(Str::OpenInBrowser)),
+                 header.bottom() - theme::M.px(18) - bh, labelW(T(Str::OpenInBrowser)), bh};
+    Rect stopBtn{chatBtn.x - theme::M.px(10) - labelW(T(Str::StopServer)), chatBtn.y,
+                 labelW(T(Str::StopServer)), bh};
+    Rect logBtn{stopBtn.x - theme::M.px(10) - labelW(T(Str::RunLog)), chatBtn.y,
+                labelW(T(Str::RunLog)), bh};
+    Rect minBtn{logBtn.x - theme::M.px(10) - labelW(T(Str::MonitorMinimize)), chatBtn.y,
+                labelW(T(Str::MonitorMinimize)), bh};
+
     {
         int idx = (int)hits_.size();
         addHit(minBtn, Action::MinimizeMonitor);
-        shell::iconButton(c, minBtn, shell::glyphs::kChevronDown, idx == hoverIndex_,
-                          idx == pressIndex_, false);
+        shell::button(c, minBtn, T(Str::MonitorMinimize), shell::ButtonStyle::Secondary,
+                      idx == hoverIndex_, idx == pressIndex_, false,
+                      shell::glyphs::kChevronDown);
     }
-
-    // ---- actions ----
-    int bh = theme::M.px(34);
-    Rect chatBtn{header.right() - theme::M.px(18) - theme::M.px(132),
-                 header.bottom() - theme::M.px(18) - bh, theme::M.px(132), bh};
-    Rect stopBtn{chatBtn.x - theme::M.px(10) - theme::M.px(96), chatBtn.y, theme::M.px(96), bh};
-    Rect logBtn{stopBtn.x - theme::M.px(10) - theme::M.px(96), chatBtn.y, theme::M.px(96), bh};
-
     {
         int idx = (int)hits_.size();
         addHit(logBtn, Action::OpenLog);

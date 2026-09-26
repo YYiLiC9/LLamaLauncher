@@ -186,6 +186,12 @@ static const Entry kTable[] = {
     /*Reload*/ {L"Reload", L"重新加载"},
     /*ChatNeedsServer*/ {L"Start the server first - the chat page needs it running.",
                          L"服务尚未启动，启动后才能打开对话页。"},
+    /*MonitorMinimize*/ {L"Minimize", L"最小化"},
+    /*LogEmpty*/ {L"No log output yet - lines appear here as the server prints them.",
+                  L"暂无日志。服务的控制台输出会实时显示在这里。"},
+    /*LogExternal*/ {L"This server was started outside the launcher, so its console output "
+                     L"cannot be captured.",
+                     L"该服务是在启动器外部启动的，无法捕获它的控制台输出。"},
     /*CommandPreview*/ {L"Command preview", L"启动命令预览"},
     /*NameDuplicate*/ {L"A configuration with this name already exists.",
                        L"已存在同名配置，请换一个名称。"},

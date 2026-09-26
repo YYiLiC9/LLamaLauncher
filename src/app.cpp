@@ -549,6 +549,12 @@ void App::stopServer() {
         externalPid_ = 0;
     }
     logTail_.clear();
+    // The run is over, so the resource view has nothing left to show - fall
+    // back to the selected configuration (or the welcome screen).
+    if (view_ == View::Running) {
+        setView(selected() ? View::Detail : View::Welcome);
+        contentScroll_ = 0;
+    }
     ::InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -640,6 +646,11 @@ void App::openChatInBrowser() {
 
 void App::openLogWindow() {
     views::LogViewer viewer(logTail_);
+    // Live: the dialog pulls logTail_ while it is open, so a log opened early
+    // fills in instead of showing a frozen (often empty) snapshot.
+    viewer.setProvider([this] { return logTail_; });
+    if (logTail_.empty() && externalPid_)
+        viewer.setEmptyHint(T(Str::LogExternal));
     viewer.show(hwnd_, T(Str::RunLog));
 }
 
@@ -702,7 +713,12 @@ void App::onTimer() {
     bool wasRunning = lastRunning_;
     lastRunning_ = running;
     if (wasRunning && !running) {
-        // The process ended on its own; surface that in the running view.
+        // The process ended on its own (crash or exit): the resource view has
+        // nothing to monitor any more, so leave it like stopServer does.
+        if (view_ == View::Running) {
+            setView(selected() ? View::Detail : View::Welcome);
+            contentScroll_ = 0;
+        }
         ::InvalidateRect(hwnd_, nullptr, FALSE);
     }
 

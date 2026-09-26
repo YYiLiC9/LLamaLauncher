@@ -2334,7 +2334,13 @@ namespace {
 
 class LogDialog : public Dialog {
 public:
-    explicit LogDialog(std::vector<std::wstring> lines) : lines_(std::move(lines)) {
+    explicit LogDialog(std::vector<std::wstring> lines)
+        : lines_(std::move(lines)) {}
+    LogDialog(std::vector<std::wstring> lines,
+              std::function<std::vector<std::wstring>()> provider,
+              const std::wstring& emptyHint)
+        : lines_(std::move(lines)), provider_(std::move(provider)),
+          emptyHint_(emptyHint) {
         // Pages depend on the console area, which is only known at paint time
         // (it moves with DPI and resizing). -1 means "not computed yet"; the
         // first paint lands on the newest lines.
@@ -2342,6 +2348,16 @@ public:
     }
 
 protected:
+    void onLayout() override {
+        // Live mode: pull the newest lines a couple of times a second. The
+        // log view used to be a frozen snapshot, which read as "blank" when
+        // it was opened before the server had printed anything.
+        if (provider_) ::SetTimer(hwnd(), 1, 500, nullptr);
+    }
+
+    void onDestroy() override {
+        ::KillTimer(hwnd(), 1);
+    }
     void onPaint(Canvas& c, const Rect& client) override {
         Rect header{0, 0, client.w, theme::M.px(56)};
         c.fill(header, theme::LayerBg);
@@ -2380,33 +2396,36 @@ protected:
         // The constructor's constant guess (40 lines) ignored DPI and resizing:
         // on a 175% display one page only fits ~24 lines, so every page skipped
         // its tail and those log lines could never be seen.
+        // Live mode pulls the current lines; snapshot mode uses the stored copy.
+        const std::vector<std::wstring> lines =
+            provider_ ? provider_() : lines_;
         int lineH = theme::M.px(18);
         int perPage = std::max(1, (area.h - theme::M.px(16)) / lineH);
-        int pages = std::max(1, (int)((lines_.size() + perPage - 1) / perPage));
+        int pages = std::max(1, (int)((lines.size() + perPage - 1) / perPage));
         if (pages != pages_) {
             pages_ = pages;
             page_ = page_ < 0 ? pages_ - 1 : std::clamp(page_, 0, pages_ - 1);
         }
         size_t start = (size_t)page_ * (size_t)perPage;
-        if (start > lines_.size()) start = lines_.size();
+        if (start > lines.size()) start = lines.size();
 
         Rect inner = area.inset(theme::M.px(8));
         int shown = 0;
-        for (size_t i = start; i < lines_.size() && shown < perPage; ++i, ++shown) {
+        for (size_t i = start; i < lines.size() && shown < perPage; ++i, ++shown) {
             Rect lr{inner.x, inner.y + shown * lineH, inner.w, lineH};
             COLORREF col = theme::TextSecondary;
-            std::wstring low = util::lower(lines_[i]);
+            std::wstring low = util::lower(lines[i]);
             if (util::contains(low, L"error") || util::contains(low, L"failed"))
                 col = theme::Danger;
             else if (util::contains(low, L"warn")) col = theme::Warning;
             else if (util::contains(low, L"listening") || util::contains(low, L"server is"))
                 col = theme::Success;
-            c.text(lr, util::ellipsize(c.dc(), lines_[i], lr.w, theme::fontMono()), col, theme::fontMono(),
+            c.text(lr, util::ellipsize(c.dc(), lines[i], lr.w, theme::fontMono()), col, theme::fontMono(),
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         }
-        if (lines_.empty()) {
-            c.text(inner, T(Str::NotAvailable), theme::TextTertiary, theme::fontBody(),
-                   DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+        if (lines.empty()) {
+            c.textBlock(inner, emptyHint_.empty() ? T(Str::LogEmpty) : emptyHint_,
+                        theme::TextTertiary, theme::fontBody());
         }
 
         int bw = theme::M.px(100);
@@ -2445,6 +2464,8 @@ protected:
 
 private:
     std::vector<std::wstring> lines_;
+    std::function<std::vector<std::wstring>()> provider_;
+    std::wstring emptyHint_;
     int page_ = 0;
     int pages_ = 1;
 };
@@ -2454,7 +2475,7 @@ private:
 LogViewer::LogViewer(std::vector<std::wstring> lines) : lines_(std::move(lines)) {}
 
 bool LogViewer::show(HWND owner, const std::wstring& title) {
-    LogDialog dlg(lines_);
+    LogDialog dlg(lines_, provider_, emptyHint_);
     return dlg.run(owner, title, theme::M.px(880), theme::M.px(620), true);
 }
 

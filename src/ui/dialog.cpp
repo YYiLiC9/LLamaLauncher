@@ -283,6 +283,11 @@ LRESULT CALLBACK Dialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (self->onKeyDown(wp)) return 0;
             break;
 
+        case WM_TIMER:
+            // Used by live dialogs (the log viewer) to refresh themselves.
+            self->invalidate();
+            break;
+
         case WM_DPICHANGED:
             // Reposition the child editors and hand them the rebuilt fonts.
             // Without this a dialog dragged to another monitor kept its old
