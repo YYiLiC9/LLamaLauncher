@@ -11,7 +11,6 @@
 #include <windows.h>
 
 #include <deque>
-#include <map>
 #include <string>
 #include <vector>
 
@@ -56,10 +55,10 @@ public:
     // Private commit of the server process (KV cache + activations + runtime);
     // with mmap'd weights this excludes the model file pages.
     uint64_t processPrivateCommit() const { return processVramBytes_; }
-    // Bytes of committed file-mapped regions backed by .gguf files (the model
-    // weights, lazily faulted in under the default mmap load mode). Rescanned
-    // every ~5th sample, not every tick.
-    uint64_t mappedModelBytes() const { return mappedModelBytes_; }
+    // The server process's own dedicated VRAM (weights actually resident on
+    // the GPU + KV cache + compute buffers), from the per-process GPU Process
+    // Memory counter. 0 when the server is not running.
+    uint64_t gpuDedicatedBytes() const { return gpuDedicatedBytes_; }
 
     // Rolling history for the charts, newest last.
     const std::deque<float>& cpuHistory() const { return cpuHistory_; }
@@ -87,6 +86,7 @@ private:
     void* memCounter_ = nullptr;
     void* gpuEngineCounter_ = nullptr;     // \GPU Engine(*)\Utilization Percentage
     void* gpuVramCounter_ = nullptr;       // \GPU Adapter Memory(*)\Dedicated Usage
+    void* gpuProcMemCounter_ = nullptr;    // \GPU Process Memory(*)\Dedicated Usage
     bool countersOk_ = false;
 
     // ---- process sampling ----
@@ -106,8 +106,7 @@ private:
     int processCpuPercent_ = 0;
     uint64_t processVramBytes_ = 0;
     bool processVramValid_ = false;
-    uint64_t mappedModelBytes_ = 0;
-    int mappedWalkTick_ = 0;
+    uint64_t gpuDedicatedBytes_ = 0;
 
     std::deque<float> cpuHistory_;
     std::deque<float> gpuHistory_;

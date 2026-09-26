@@ -35,6 +35,8 @@ std::wstring ellipsize(HDC dc, const std::wstring& s, int maxPx, HFONT font);
 
 // ------------------------------------------------------------------- files --
 bool fileExists(const std::wstring& path);
+// Size of the model on disk, all GGUF shards summed (0 when missing).
+uint64_t modelFileBytes(const std::wstring& modelPath);
 bool dirExists(const std::wstring& path);
 bool ensureDir(const std::wstring& path);
 bool copyFileRaw(const std::wstring& from, const std::wstring& to);

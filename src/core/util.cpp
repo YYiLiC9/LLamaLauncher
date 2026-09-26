@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <regex>
 
 namespace util {
 
@@ -153,6 +154,35 @@ std::wstring ellipsize(HDC dc, const std::wstring& s, int maxPx) {
 bool fileExists(const std::wstring& path) {
     DWORD attr = ::GetFileAttributesW(path.c_str());
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// Size of the model on disk: the -m file itself, and for sharded GGUFs
+// (xxx-00001-of-00003.gguf) every sibling shard. Returns 0 when the file
+// does not exist.
+uint64_t modelFileBytes(const std::wstring& modelPath) {
+    auto sizeOf = [](const std::wstring& p) -> uint64_t {
+        WIN32_FILE_ATTRIBUTE_DATA fa{};
+        if (!::GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &fa)) return 0;
+        return ((uint64_t)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+    };
+    uint64_t total = sizeOf(modelPath);
+    if (!total) return 0;
+    // Sharded? "...-00001-of-00003.gguf" -> sum shards 1..N.
+    std::wstring low = util::lower(modelPath);
+    static const std::wregex shard(L"-(\\d+)-of-(\\d+)\\.gguf$");
+    std::wsmatch m;
+    if (!std::regex_search(low, m, shard)) return total;
+    int first = ::_wtoi(m[1].str().c_str());
+    int count = ::_wtoi(m[2].str().c_str());
+    if (count <= 1 || first != 1) return total;
+    std::wstring stem = modelPath.substr(0, modelPath.size() - m.length(0));
+    for (int i = 1; i <= count; ++i) {
+        if (i == first) continue;
+        wchar_t idx[16];
+        ::swprintf(idx, 16, L"-%05d-of-%05d.gguf", i, count);
+        total += sizeOf(stem + idx);
+    }
+    return total;
 }
 
 bool dirExists(const std::wstring& path) {

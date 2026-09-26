@@ -1775,9 +1775,18 @@ protected:
                 r.custom = true;
                 r.flag = kNewRowFlag;
                 r.value.clear();
-                r.group = (activeGroup_ >= 0 && activeGroup_ < (int)groups_.size())
-                              ? groups_[(size_t)activeGroup_]
-                              : L"custom";
+                // A custom row belongs to the custom group, period - inheriting
+                // the currently active group buried user-added parameters in
+                // whatever section happened to be open. If a specific group is
+                // active, jump there too, so the new row is actually visible.
+                r.group = L"custom";
+                if (activeGroup_ >= 0) {
+                    for (size_t i = 0; i < groups_.size(); ++i)
+                        if (util::iequals(groups_[i], L"custom")) {
+                            activeGroup_ = (int)i;
+                            break;
+                        }
+                }
                 // A row the user has just asked for starts switched on. Rows
                 // default to off, and an off row has both its editors disabled -
                 // so a new row could not be typed into at all, its value was

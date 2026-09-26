@@ -50,6 +50,7 @@ void Monitor::initPdh() {
     addCounter(query, L"\\Memory\\% Committed Bytes In Use", &memCounter_);
     addCounter(query, L"\\GPU Engine(*)\\Utilization Percentage", &gpuEngineCounter_);
     addCounter(query, L"\\GPU Adapter Memory(*)\\Dedicated Usage", &gpuVramCounter_);
+    addCounter(query, L"\\GPU Process Memory(*)\\Dedicated Usage", &gpuProcMemCounter_);
 
     if (::PdhCollectQueryData(query) != ERROR_SUCCESS) return;
     countersOk_ = cpuCounter_ != nullptr || memCounter_ != nullptr;
@@ -63,6 +64,7 @@ void Monitor::shutdownPdh() {
     memCounter_ = nullptr;
     gpuEngineCounter_ = nullptr;
     gpuVramCounter_ = nullptr;
+    gpuProcMemCounter_ = nullptr;
 }
 
 bool Monitor::sumCounterArray(void* counter, uint64_t& total, bool percentMode, int& instanceCount,
@@ -217,42 +219,6 @@ void Monitor::sample(DWORD pid) {
                 processVramBytes_ = pmc.PrivateUsage;
                 processVramValid_ = true;
             }
-
-            // Model weights under the default mmap load mode are file-backed
-            // pages of the .gguf files. Sum the committed file-mapped regions
-            // whose backing file is a .gguf (all shards). This walk is too
-            // heavy for a 500 ms tick, so it runs every 10th sample (~5 s).
-            // Needs PROCESS_QUERY_INFORMATION, hence the widened open above.
-            ++mappedWalkTick_;
-            if (mappedWalkTick_ % 10 == 1 || mappedModelBytes_ == 0) {
-                uint64_t mapped = 0;
-                MEMORY_BASIC_INFORMATION mbi{};
-                const unsigned char* addr = nullptr;
-                std::map<void*, bool> baseGguf;
-                while (::VirtualQueryEx(h, addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
-                    if (mbi.Type == MEM_MAPPED && mbi.State == MEM_COMMIT &&
-                        mbi.AllocationBase) {
-                        void* base = mbi.AllocationBase;
-                        auto it = baseGguf.find(base);
-                        bool isGguf;
-                        if (it == baseGguf.end()) {
-                            wchar_t name[MAX_PATH] = {};
-                            isGguf = ::K32GetMappedFileNameW(h, base, name, MAX_PATH) != 0;
-                            if (isGguf) {
-                                std::wstring n = util::lower(name);
-                                isGguf = n.size() >= 5 &&
-                                         n.compare(n.size() - 5, 5, L".gguf") == 0;
-                            }
-                            baseGguf.emplace(base, isGguf);
-                        } else {
-                            isGguf = it->second;
-                        }
-                        if (isGguf) mapped += mbi.RegionSize;
-                    }
-                    addr = (const unsigned char*)mbi.BaseAddress + mbi.RegionSize;
-                }
-                mappedModelBytes_ = mapped;
-            }
             FILETIME creation{}, exit{}, kernel{}, user{};
             if (::GetProcessTimes(h, &creation, &exit, &kernel, &user)) {
                 ULARGE_INTEGER k{}, u{};
@@ -303,6 +269,15 @@ void Monitor::sample(DWORD pid) {
             uint64_t budget = gpu_.vramTotal ? gpu_.vramTotal : 1;
             double pct = (double)vram * 100.0 / (double)budget;
             gpu_.vramPercent = (uint32_t)(std::clamp(pct, 0.0, 100.0) + 0.5);
+        }
+        // Per-process dedicated VRAM: the server's own weights + KV + compute
+        // buffers. 0 when no pid (nothing of ours is on the GPU).
+        uint64_t dedicated = 0;
+        if (pid != 0 &&
+            sumCounterArray(gpuProcMemCounter_, dedicated, false, instances, pidFilter)) {
+            gpuDedicatedBytes_ = dedicated;
+        } else if (pid == 0) {
+            gpuDedicatedBytes_ = 0;
         }
     }
 

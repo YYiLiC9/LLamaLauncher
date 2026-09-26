@@ -874,15 +874,26 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     y = chartCard.bottom() + theme::M.gap;
 
     // ---- process footprint ----
-    // A truthful breakdown for the mmap era: llama.cpp no longer prints buffer
-    // sizes, and the weights are file-backed pages faulted in lazily. What we
-    // CAN say from outside the process:
-    //   模型权重（文件映射） - committed regions backed by the .gguf files
-    //   运行时（KV + 激活）   - private commit (KV cache, activations, runtime)
-    //   模型（合计）          - resident working set
-    // System RAM / VRAM totals live in the tiles above, so the meters here
-    // compare against system memory.
-    int rows = monitor_.processWorkingSet() ? 3 : 1;
+    // A truthful breakdown for the mmap era, measured entirely from outside
+    // the process (llama.cpp no longer prints buffer sizes):
+    //   模型权重            - the .gguf files on disk, all shards summed
+    //   KV 缓存 + 计算缓冲   - dedicated VRAM minus the weights; only known
+    //                          when the weights fit the GPU. When they do not
+    //                          (mixed offload) the split is unknowable from
+    //                          outside, so the row is skipped.
+    //   显存总占用           - the process's own dedicated VRAM (PDH counter)
+    //   运行时（私有提交）   - private commit (CPU-side weights, KV staging)
+    //   模型（合计）         - resident working set
+    bool runningNow = processAlive();
+    uint64_t weights = runningNow ? util::modelFileBytes(cfg.modelFile()) : 0;
+    double dedicated = (double)monitor_.gpuDedicatedBytes();
+    double kvBuf = std::max(0.0, dedicated - (double)weights);
+    // KV is only separable when every weight byte went to the GPU. A 19 GB
+    // model on a 16 GB card ends up mixed (part of the weights stay in RAM,
+    // counted in the private commit instead), and "dedicated - weights" goes
+    // negative - hiding the row beats showing a fake zero.
+    bool kvKnown = runningNow && weights > 0 && dedicated >= (double)weights;
+    int rows = runningNow ? (kvKnown ? 5 : 4) : 1;
     Rect procCard{x, y, w, theme::M.px(32) + rows * theme::M.px(24) +
                              (rows - 1) * theme::M.px(6) + theme::M.px(10)};
     shell::card(c, procCard);
@@ -893,6 +904,7 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     int ry = procCard.y + theme::M.px(32);
     int rowH = theme::M.px(24);
     double ramPool = mem.total ? (double)mem.total : 1.0;
+    double vramPool = gpu.vramTotal ? (double)gpu.vramTotal : 1.0;
     auto addRow = [&](const wchar_t* label, const std::wstring& value, double frac,
                       COLORREF color, wchar_t glyph) {
         shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32),
@@ -901,18 +913,23 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         ry += rowH + theme::M.px(6);
     };
 
-    if (rows == 3) {
-        addRow(T(Str::ModelMapped), util::humanBytes(monitor_.mappedModelBytes()),
-               (double)monitor_.mappedModelBytes() / ramPool, kGpuColor,
-               shell::glyphs::kGauge);
+    if (rows > 1) {
+        addRow(T(Str::ModelWeights), util::humanBytes(weights),
+               (double)weights / vramPool, kGpuColor, shell::glyphs::kGauge);
+        if (kvKnown) {
+            addRow(T(Str::KvBuf), util::humanBytes((uint64_t)kvBuf),
+                   kvBuf / vramPool, kMemColor, shell::glyphs::kMemoryStick);
+        }
+        addRow(T(Str::MetricVram), util::humanBytes((uint64_t)dedicated),
+               dedicated / vramPool, kGpuColor, shell::glyphs::kGauge);
         addRow(T(Str::RuntimeCommit), util::humanBytes(monitor_.processPrivateCommit()),
                (double)monitor_.processPrivateCommit() / ramPool, kMemColor,
-               shell::glyphs::kMemoryStick);
+               shell::glyphs::kChip);
     }
     double wsFrac = mem.total ? (double)monitor_.processWorkingSet() / (double)mem.total : 0.0;
     addRow(T(Str::MetricModel),
-           rows == 3 ? util::humanBytes(monitor_.processWorkingSet())
-                     : std::wstring(T(Str::NotAvailable)),
+           runningNow ? util::humanBytes(monitor_.processWorkingSet())
+                   : std::wstring(T(Str::NotAvailable)),
            wsFrac, kCpuColor, shell::glyphs::kChip);
 
     y = procCard.bottom() + theme::M.gap;
