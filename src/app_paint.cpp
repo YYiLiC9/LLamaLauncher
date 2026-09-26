@@ -691,13 +691,24 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
            util::ellipsize(c.dc(), stateText, state.w, theme::fontCaption()), stateColor, theme::fontCaption(),
            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-    // port + uptime chips
+    // port + uptime, one tidy right-aligned line. Both segments are measured,
+    // so the line can neither clip (the old fixed 180px box did at 175% DPI
+    // once the uptime grew past an hour) nor drift out of the header.
     int port = store::configPort(cfg);
-    std::wstring info = util::format(L"%s %d    %s %s", T(Str::Port), port, T(Str::Uptime),
-                                     util::formatDuration(uptime).c_str());
-    Rect infoRect{header.right() - theme::M.px(310), header.y + theme::M.px(16),
-                  theme::M.px(180), theme::M.px(20)};
-    c.text(infoRect, info, theme::TextTertiary, theme::fontCaption(),
+    std::wstring portText = util::format(L"%s %d", T(Str::Port), port);
+    std::wstring upText = util::format(L"%s %s", T(Str::Uptime),
+                                       util::formatDuration(uptime).c_str());
+    int portW = c.textWidth(portText, theme::fontCaption());
+    int upW = c.textWidth(upText, theme::fontCaption());
+    int infoRight = header.right() - theme::M.px(18);
+    int infoY = header.y + theme::M.px(16);
+    int infoH = theme::M.px(20);
+    c.text(Rect{infoRight - upW, infoY, upW, infoH}, upText, theme::TextTertiary,
+           theme::fontCaption(), DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    c.circle(infoRight - upW - theme::M.px(12), infoY + infoH / 2, theme::M.px(2),
+             theme::TextTertiary);
+    c.text(Rect{infoRight - upW - theme::M.px(24) - portW, infoY, portW, infoH}, portText,
+           theme::TextTertiary, theme::fontCaption(),
            DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // ---- actions ----
@@ -847,9 +858,11 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     chartRow(T(Str::MetricCpu), monitor_.cpuHistory(), kCpuColor,
              util::format(L"%d%%", monitor_.cpuPercent()), shell::glyphs::kChip);
+    // GPU row plots VRAM usage - the same number the ring and tile above show,
+    // so the chart and the ring can never disagree.
     chartRow(T(Str::MetricGpu), monitor_.gpuHistory(), kGpuColor,
-             gpu.hasEngineCounter ? util::format(L"%d%%", monitor_.gpuPercent())
-                                  : std::wstring(T(Str::NotAvailable)),
+             gpu.vramValid ? util::format(L"%u%%", gpu.vramPercent)
+                           : std::wstring(T(Str::NotAvailable)),
              shell::glyphs::kGauge);
 
     y = chartCard.bottom() + theme::M.gap;

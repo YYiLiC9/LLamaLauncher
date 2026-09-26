@@ -272,7 +272,10 @@ void Monitor::sample(DWORD pid) {
 
     // ---------------------------------------------------------------- charts --
     push(cpuHistory_, (float)cpuPercent_);
-    push(gpuHistory_, (float)gpuPercent_);
+    // The GPU chart plots VRAM usage, the same quantity the ring and the tile
+    // show - engine utilization sat flat at 0 whenever nothing was inferring
+    // and read as a broken graph.
+    push(gpuHistory_, gpu_.vramValid ? (float)gpu_.vramPercent : 0.0f);
     push(memHistory_, (float)memory_.percent);
 }
 

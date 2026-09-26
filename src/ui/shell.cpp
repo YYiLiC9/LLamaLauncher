@@ -185,18 +185,26 @@ void Canvas::circleOutline(int cx, int cy, int radius, COLORREF color, int width
 }
 
 void Canvas::supersample(const Rect& region, const std::function<void(Canvas&)>& draw) {
-    constexpr int S = 4;
     const int w = region.w, h = region.h;
     if (w <= 0 || h <= 0 || !draw) return;
+
+    // Adaptive scale. 4x makes small shapes (rings, the corner ball) butter
+    // smooth and costs nothing at their size; the big chart plots at 4x meant
+    // an ~11 MB bitmap plus two filtered StretchBlt passes per chart on every
+    // repaint, which is what made view switches and scrolling feel sluggish.
+    // Large regions drop to 2x - still far smoother than no AA, at a quarter
+    // of the work.
+    int S = (w * h > 240 * 160) ? 2 : 4;
 
     HDC hi = ::CreateCompatibleDC(dc_);
     HBITMAP bmp = ::CreateCompatibleBitmap(dc_, w * S, h * S);
     HGDIOBJ oldBmp = ::SelectObject(hi, bmp);
 
     // Start from the content already on the canvas, so the shapes blend into
-    // their real background instead of an arbitrary fill colour.
-    ::SetStretchBltMode(hi, HALFTONE);
-    ::SetBrushOrgEx(hi, 0, 0, nullptr);
+    // their real background instead of an arbitrary fill colour. This is an
+    // exact integer-multiple enlargement, so COLORONCOLOR (plain pixel copy)
+    // is lossless here and skips the expensive HALFTONE filtering pass.
+    ::SetStretchBltMode(hi, COLORONCOLOR);
     ::StretchBlt(hi, 0, 0, w * S, h * S, dc_, region.x, region.y, w, h, SRCCOPY);
 
     // The world transform (and only that) must live inside this save block:
