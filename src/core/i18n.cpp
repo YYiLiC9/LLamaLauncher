@@ -204,6 +204,7 @@ static const Entry kTable[] = {
     /*LogExternal*/ {L"This server was started outside the launcher, so its console output "
                      L"cannot be captured.",
                      L"该服务是在启动器外部启动的，无法捕获它的控制台输出。"},
+    /*LogLineCount*/ {L"%zu lines", L"%zu 行"},
     /*ServerBusy*/ {L"Another configuration is already running - stop it first.",
                     L"已有配置在运行，请先停止当前服务。"},
     /*CommandPreview*/ {L"Command preview", L"启动命令预览"},
@@ -215,6 +216,35 @@ static const Entry kTable[] = {
     /*ThemeLight*/ {L"Light", L"浅色"},
     /*ThemeDark*/ {L"Dark", L"深色"},
     /*ImportExportShort*/ {L"Import/Export", L"导入导出"},
+    /*SliceWeights*/ {L"Weights", L"模型权重"},
+    /*SliceKv*/ {L"KV cache", L"KV 缓存"},
+    /*SliceCompute*/ {L"Compute buffers", L"计算缓冲"},
+    /*SliceWeightsCompute*/ {L"Weights + buffers", L"权重 + 缓冲"},
+    /*SliceWorkingSetRam*/ {L"Rest of process", L"进程其余占用"},
+    /*SliceOtherProcs*/ {L"Other processes", L"其他进程"},
+    /*SliceFree*/ {L"Free", L"空闲"},
+    /*TipWeightsBody*/ {L"The GGUF file is %s on disk; %u of %u layers fit in VRAM.",
+                        L"GGUF 文件在磁盘上为 %s，其中 %u/%u 层放入显存。"},
+    /*TipWeightsPartialBody*/ {L"The whole GGUF file (%s on disk) is resident in VRAM.",
+                               L"整个 GGUF 文件（磁盘 %s）已全部载入显存。"},
+    /*TipKvBody*/ {L"%u layers x %llu tokens x %u KV heads x %u dims x 2 (K and V), %s.",
+                   L"%u 层 × %llu 上下文 × %u 个 KV 头 × %u 维 × 2（K 与 V），类型 %s。"},
+    /*TipComputeBody*/ {L"Whatever the server holds in VRAM beyond weights and cache: "
+                        L"backend runtime and compute buffers.",
+                        L"服务器显存中除权重与 KV 之外的部分：后端运行时与计算缓冲。"},
+    /*TipWeightsComputeBody*/ {L"The server's whole VRAM footprint minus the cache. The build "
+                               L"did not report how many layers were offloaded, so weights and "
+                               L"buffers cannot be told apart here.",
+                               L"服务器显存总占用减去 KV 缓存。当前构建未打印卸载层数，"
+                               L"因此权重与缓冲无法在此区分。"},
+    /*TipWorkingSetBody*/ {L"The rest of llama-server's resident memory: any host copy of the "
+                           L"weights, backend buffers, thread stacks and the sampler.",
+                           L"llama-server 常驻内存的其余部分：权重的主机副本、后端缓冲、"
+                           L"线程栈与采样器。"},
+    /*TipOtherBody*/ {L"Everything else on this device - the desktop, the browser, anything "
+                      L"that is not llama-server.",
+                      L"该设备上除 llama-server 之外的所有占用：桌面、浏览器及其他程序。"},
+    /*TipFreeBody*/ {L"Capacity nobody is using.", L"尚未被任何进程占用的容量。"},
     /*ConfigsCount*/ {L"configs", L"个配置"},
 };
 

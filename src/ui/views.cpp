@@ -2369,10 +2369,10 @@ public:
               const std::wstring& emptyHint)
         : lines_(std::move(lines)), provider_(std::move(provider)),
           emptyHint_(emptyHint) {
-        // Pages depend on the console area, which is only known at paint time
-        // (it moves with DPI and resizing). -1 means "not computed yet"; the
-        // first paint lands on the newest lines.
-        page_ = -1;
+        // The scroll range depends on the console area, which is only known at
+        // paint time (it moves with DPI and resizing), so the first paint is
+        // what actually lands on the newest lines.
+        followTail_ = true;
     }
 
 protected:
@@ -2387,6 +2387,11 @@ protected:
         ::KillTimer(hwnd(), 1);
     }
     void onPaint(Canvas& c, const Rect& client) override {
+        // Live mode pulls the current lines; snapshot mode uses the stored copy.
+        // Read once per frame: the header shows the count and the body draws
+        // them, and a second call could leave the two disagreeing.
+        const std::vector<std::wstring> lines = provider_ ? provider_() : lines_;
+
         Rect header{0, 0, client.w, theme::M.px(56)};
         c.fill(header, theme::LayerBg);
         c.line(0, header.bottom() - 1, client.w, header.bottom() - 1, theme::Border);
@@ -2394,40 +2399,33 @@ protected:
                theme::TextPrimary, theme::fontSubtitleBold(),
                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-        // Page indicator + navigation.
-        Rect info{client.w - theme::M.px(260), 0, theme::M.px(140), header.h};
-        c.text(info, util::format(L"%d / %d", page_ + 1, pages_), theme::TextTertiary,
+        // Line count plus one button: back to the tail. The console scrolls a
+        // line at a time now, so paging buttons would only get in the way - but
+        // a live log still needs a way to snap back to the newest line.
+        Rect info{client.w - theme::M.px(220), 0, theme::M.px(150), header.h};
+        c.text(info, util::format(T(Str::LogLineCount), lines.size()), theme::TextTertiary,
                theme::fontCaption(), DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-        Rect prev{client.w - theme::M.px(112), header.cy() - theme::M.px(13), theme::M.px(28),
-                  theme::M.px(26)};
-        Rect next{prev.right() + theme::M.px(6), prev.y, prev.w, prev.h};
-        Rect bottom{next.right() + theme::M.px(6), prev.y, theme::M.px(28), prev.h};
-        addHit(prev, ID_PREV);
-        addHit(next, ID_NEXT);
+        Rect bottom{client.w - theme::M.px(56), header.cy() - theme::M.px(13), theme::M.px(28),
+                    theme::M.px(26)};
         addHit(bottom, ID_BOTTOM);
-        c.glyph(prev, shell::glyphs::kBack, page_ > 0 ? theme::TextPrimary : theme::TextDisabled,
-                13);
-        c.glyph(next, shell::glyphs::kRefresh,
-                page_ < pages_ - 1 ? theme::TextPrimary : theme::TextDisabled, 13);
-        c.glyph(bottom, shell::glyphs::kImport, theme::TextPrimary, 13);
+        c.glyph(bottom, shell::glyphs::kImport,
+                followTail_ ? theme::TextDisabled : theme::TextPrimary, 13);
 
         // Console surface. A fixed light grey read as a glaring white slab in
-        // the dark theme, so the muted field colour tracks the palette.
+        // the dark theme, so the muted field colour tracks the palette. The
+        // scrollbar sits outside it, so the wrap width never depends on whether
+        // the bar happens to be needed this frame.
         Rect area{theme::M.px(16), theme::M.px(56) + theme::M.px(12),
-                  client.w - theme::M.px(32),
+                  client.w - theme::M.px(32) - theme::M.px(10),
                   client.h - theme::M.px(56) - theme::M.px(70)};
         c.fillRound(area, theme::M.radiusSmall, theme::fieldBack(false));
         c.strokeRound(area, theme::M.radiusSmall, theme::Border);
 
-        // The page split must come from the real capacity of the console area.
-        // Live mode pulls the current lines; snapshot mode uses the stored copy.
-        // Lines wrap instead of being chopped by an ellipsis, so pages are
-        // slices of the *rendered height*: every entry is measured with the
-        // same flags the draw uses, and the page boundary lands between
-        // entries, never through one.
-        const std::vector<std::wstring> lines =
-            provider_ ? provider_() : lines_;
+        // Lines wrap instead of being chopped by an ellipsis, so scrolling is
+        // over the *rendered height*: every entry is measured with the same
+        // flags the draw uses, and the offset is in pixels, which keeps a long
+        // wrapped entry from being cut in half by a page boundary.
         Rect inner = area.inset(theme::M.px(8));
         int wrapW = std::max(1, inner.w);
 
@@ -2457,29 +2455,23 @@ protected:
             measuredCount_ = lines.size();
             measuredCpl_ = cpl;
         }
-        int pageH = std::max(1, inner.h);
-        int pages = std::max(1, (measuredTotal_ + pageH - 1) / pageH);
-        // Sync unconditionally: guarding on "pages changed" left page_ at its
-        // -1 sentinel forever when the log never grew past one page, and the
-        // start offset then collapsed past the end - a blank console that
-        // only recovered after the user clicked a page button.
-        // While the user is already reading the last page, stay on the tail as
-        // new lines arrive; otherwise keep the page they scrolled to.
-        bool followTail = page_ < 0 || page_ >= pages_ - 1;
-        pages_ = pages;
-        if (followTail)
-            page_ = pages_ - 1;
+        // Pixel offset rather than a page index: the log grows a line at a
+        // time, and a page boundary used to jump a screenful - which made
+        // following a live tail impossible.
+        scrollMax_ = std::max(0, measuredTotal_ - inner.h);
+        lastViewH_ = inner.h;
+        if (followTail_)
+            scroll_ = scrollMax_;
         else
-            page_ = std::clamp(page_, 0, pages_ - 1);
-        long long startH = (long long)page_ * pageH;
+            scroll_ = std::clamp(scroll_, 0, scrollMax_);
 
         int shown = 0;
         int acc = 0;
         for (size_t i = 0; i < lines.size(); ++i) {
             int h = measuredHeights_[i];
-            int top = acc - (int)startH;
+            int top = acc - scroll_;
             acc += h;
-            if (top + h <= 0) continue;         // entirely above this page
+            if (top + h <= 0) continue;         // entirely above the view
             if (top >= inner.h) break;          // entirely below it
             COLORREF col = theme::TextSecondary;
             std::wstring low = util::lower(lines[i]);
@@ -2505,6 +2497,24 @@ protected:
                         theme::TextTertiary, theme::fontBody());
         }
 
+        // Scrollbar. A log that grows while you read needs a position indicator
+        // and something to drag; it is drawn after the text so it stays on top.
+        if (scrollMax_ > 0) {
+            int trackH = area.h;
+            double visible = (double)inner.h / (double)measuredTotal_;
+            int thumbH = std::max(theme::M.px(24), (int)(trackH * std::clamp(visible, 0.05, 1.0)));
+            int travel = std::max(1, trackH - thumbH);
+            trackRect_ = Rect{area.right() + theme::M.px(3), area.y, theme::M.px(6), trackH};
+            thumbRect_ = Rect{trackRect_.x, area.y + (int)((long long)travel * scroll_ / scrollMax_),
+                              trackRect_.w, thumbH};
+            c.fillRound(trackRect_, theme::M.px(3), theme::ChartTrack);
+            c.fillRound(thumbRect_, theme::M.px(3),
+                        dragging_ ? theme::TextSecondary : theme::BorderStrong);
+        } else {
+            trackRect_ = Rect{};
+            thumbRect_ = Rect{};
+        }
+
         int bw = theme::M.px(100);
         int bh = theme::M.px(34);
         Rect closeBtn{client.w - theme::M.px(16) - bw, client.h - theme::M.px(16) - bh, bw, bh};
@@ -2514,21 +2524,50 @@ protected:
     }
 
     void onMouseWheel(int delta, int, int) override {
-        if (delta > 0 && page_ > 0) --page_;
-        else if (delta < 0 && page_ < pages_ - 1) ++page_;
+        // One wheel notch is three lines. Positive delta is "away from the
+        // user" (scroll up), which is Win32's sign convention.
+        int step = (std::abs(delta) < 120 ? 1 : std::abs(delta) / 120) * 3 * theme::M.px(18);
+        if (delta > 0) {
+            scroll_ -= step;
+            followTail_ = false;
+        } else {
+            scroll_ += step;
+            if (scroll_ >= scrollMax_) followTail_ = true;
+        }
+        scroll_ = std::clamp(scroll_, 0, scrollMax_);
         invalidate();
     }
 
+    // Dragging the thumb: the travel the thumb has is the whole scroll range,
+    // so the mapping is a ratio rather than a one-to-one pixel move.
+    void onLButtonDown(int x, int y) override {
+        if (scrollMax_ <= 0 || !trackRect_.contains(x, y)) return;
+        dragging_ = true;
+        dragY_ = y;
+        dragScroll_ = scroll_;
+    }
+
+    void onMouseMove(int x, int y) override {
+        if (!dragging_) {
+            // The framework clears the hover id before dispatching here, so the
+            // tail button only lights up if the dialog restores it.
+            hoverId_ = hitAt(x, y);
+            return;
+        }
+        int travel = std::max(1, trackRect_.h - thumbRect_.h);
+        int target = dragScroll_ + (int)((long long)(y - dragY_) * scrollMax_ / travel);
+        scroll_ = std::clamp(target, 0, scrollMax_);
+        followTail_ = scroll_ >= scrollMax_;
+        invalidate();
+    }
+
+    void onLButtonUp(int, int) override { dragging_ = false; }
+
     void onClick(int id) override {
         switch (id) {
-            case ID_PREV:
-                if (page_ > 0) --page_;
-                break;
-            case ID_NEXT:
-                if (page_ < pages_ - 1) ++page_;
-                break;
             case ID_BOTTOM:
-                page_ = pages_ - 1;
+                followTail_ = true;
+                scroll_ = scrollMax_;
                 break;
             case ID_CANCEL:
                 close(DialogResult::Ok);
@@ -2537,6 +2576,22 @@ protected:
                 break;
         }
         invalidate();
+    }
+
+    bool onKeyDown(WPARAM key) override {
+        // Page/End/Home on a log that can be thousands of lines long.
+        int pageStep = std::max(1, lastViewH_ - theme::M.px(18));
+        switch (key) {
+            case VK_PRIOR: scroll_ -= pageStep; followTail_ = false; break;
+            case VK_NEXT:  scroll_ += pageStep; break;
+            case VK_HOME:  scroll_ = 0; followTail_ = false; break;
+            case VK_END:   scroll_ = scrollMax_; followTail_ = true; break;
+            default: return false;
+        }
+        scroll_ = std::clamp(scroll_, 0, scrollMax_);
+        if (scroll_ >= scrollMax_) followTail_ = true;
+        invalidate();
+        return true;
     }
 
 private:
@@ -2549,8 +2604,19 @@ private:
     size_t measuredCount_ = (size_t)-1;
     std::function<std::vector<std::wstring>()> provider_;
     std::wstring emptyHint_;
-    int page_ = 0;
-    int pages_ = 1;
+    // Scroll offset in pixels over the wrapped content.
+    int scroll_ = 0;
+    int scrollMax_ = 0;
+    // While true the view keeps pinning itself to the newest line as the log
+    // grows; the first scroll upwards releases it.
+    bool followTail_ = true;
+    bool dragging_ = false;
+    int dragY_ = 0;
+    int dragScroll_ = 0;
+    Rect trackRect_;
+    Rect thumbRect_;
+    // Viewport height of the last paint, so PageUp/PageDown can move a screen.
+    int lastViewH_ = 0;
 };
 
 }  // namespace

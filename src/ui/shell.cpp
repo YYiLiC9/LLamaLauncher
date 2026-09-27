@@ -561,8 +561,12 @@ void meterRow(Canvas& c, const Rect& r, const std::wstring& label, const std::ws
 }
 
 void stackedBar(Canvas& c, const Rect& r, const BarSegment* segments, size_t count,
-                COLORREF track) {
+                COLORREF track, Rect* sliceRects, size_t sliceCap) {
     if (r.w <= 0 || r.h <= 0) return;
+    // Callers that registered hit regions last frame read them before this
+    // paint, so an empty slice has to be reported as an empty rect rather than
+    // left holding last frame's geometry.
+    for (size_t i = 0; sliceRects && i < sliceCap; ++i) sliceRects[i] = Rect{};
     int radius = std::min(theme::M.radiusSmall, r.h / 2);
     c.fillRound(r, radius, track);
 
@@ -582,7 +586,9 @@ void stackedBar(Canvas& c, const Rect& r, const BarSegment* segments, size_t cou
         int w = (int)std::lround(f * (double)r.w);
         if (w <= 0) continue;
         int x2 = std::min(x + w, r.right());
-        c.fill(Rect{x, r.y, x2 - x, r.h}, segments[i].color);
+        Rect slice{x, r.y, x2 - x, r.h};
+        c.fill(slice, segments[i].color);
+        if (sliceRects && i < sliceCap) sliceRects[i] = slice;
         // A hairline in the track colour keeps two similar shades readable.
         if (x2 < r.right()) c.fill(Rect{x2, r.y, 1, r.h}, track);
         x = x2;
@@ -594,17 +600,91 @@ void stackedBar(Canvas& c, const Rect& r, const BarSegment* segments, size_t cou
     ::RestoreDC(dc, saved);
 }
 
+void tipBubble(Canvas& c, const Rect& bounds, const Rect& anchor, const std::wstring& title,
+               const std::wstring& body) {
+    if (title.empty() && body.empty()) return;
+
+    const int pad = theme::M.px(10);
+    const int lineGap = theme::M.px(3);
+    HFONT titleFont = theme::fontBodyBold();
+    HFONT bodyFont = theme::fontCaption();
+
+    // Wrap the body instead of letting it run off the window: the explanations
+    // are a sentence long in either language, and the bubble has to fit next to
+    // a bar that already spans most of the card.
+    int maxTextW = std::min(theme::M.px(320), bounds.w - theme::M.px(32));
+    maxTextW = std::max(maxTextW, theme::M.px(120));
+
+    int titleW = title.empty() ? 0 : c.textWidth(title, titleFont);
+    int titleH = title.empty() ? 0 : theme::lineHeight(titleFont);
+
+    int bodyW = 0, bodyH = 0;
+    if (!body.empty()) {
+        HGDIOBJ old = ::SelectObject(c.dc(), bodyFont);
+        RECT rc{0, 0, maxTextW, 0};
+        ::DrawTextW(c.dc(), body.c_str(), (int)body.size(), &rc,
+                    DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        ::SelectObject(c.dc(), old);
+        bodyW = rc.right - rc.left;
+        bodyH = rc.bottom - rc.top;
+    }
+
+    int textW = std::max(titleW, bodyW);
+    int w = textW + pad * 2;
+    int h = pad * 2 + titleH + (bodyH ? lineGap + bodyH : 0);
+
+    // Above the anchor by default, flipped below when that would leave the
+    // window - and clamped inside `bounds` whichever way it went.
+    int x = anchor.cx() - w / 2;
+    int y = anchor.y - h - theme::M.px(8);
+    if (y < bounds.y + theme::M.px(4)) y = anchor.bottom() + theme::M.px(8);
+    int minX = bounds.x + theme::M.px(8);
+    int maxX = std::max(minX, bounds.right() - w - theme::M.px(8));
+    int minY = bounds.y + theme::M.px(4);
+    int maxY = std::max(minY, bounds.bottom() - h - theme::M.px(4));
+    Rect tip{std::clamp(x, minX, maxX), std::clamp(y, minY, maxY), w, h};
+
+    // Same reason every other curve goes through supersample: a 1x RoundRect
+    // has visible stair-stepping on the corners.
+    c.supersample(tip.inset(-theme::M.px(3)), [&](Canvas& sc) {
+        sc.fillRound(tip, theme::M.radiusMedium, theme::CardBg);
+        sc.strokeRound(tip, theme::M.radiusMedium, theme::BorderStrong);
+    });
+
+    int ty = tip.y + pad;
+    if (!title.empty()) {
+        c.text(Rect{tip.x + pad, ty, textW, titleH}, title, theme::TextPrimary, titleFont,
+               DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+        ty += titleH + lineGap;
+    }
+    if (!body.empty()) {
+        c.text(Rect{tip.x + pad, ty, textW, bodyH}, body, theme::TextSecondary, bodyFont,
+               DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    }
+}
+
 int legendEntry(Canvas& c, const Rect& r, COLORREF color, const std::wstring& label,
                 COLORREF secondColor) {
-    int sw = theme::M.px(10);
+    int sw = theme::M.px(11);
     Rect box{r.x, r.cy() - sw / 2, sw, sw};
-    if (secondColor == CLR_INVALID) {
-        c.fillRound(box, theme::M.radiusSmall, color);
-    } else {
-        c.fillRound(box, theme::M.radiusSmall, color);
-        c.fillRound(Rect{box.x + sw / 2, box.y, sw - sw / 2, sw}, theme::M.radiusSmall,
-                    secondColor);
-    }
+    // A ~10 px rounded square is exactly the size at which GDI's RoundRect
+    // stair-steps most visibly, so the swatch is drawn 4x and scaled back like
+    // the rings and the corner ball.
+    c.supersample(box.inset(-2), [&](Canvas& sc) {
+        int rad = std::max(2, sw / 3);
+        sc.fillRound(box, rad, color);
+        if (secondColor == CLR_INVALID) return;
+        // Split swatch: the left half keeps the base colour, the right half is
+        // clipped in so the rounded corners survive on both sides.
+        int saved = ::SaveDC(sc.dc());
+        HRGN clip = ::CreateRectRgn(box.x + sw / 2, box.y, box.right(), box.bottom());
+        if (clip) {
+            ::ExtSelectClipRgn(sc.dc(), clip, RGN_AND);
+            ::DeleteObject(clip);
+        }
+        sc.fillRound(box, rad, secondColor);
+        ::RestoreDC(sc.dc(), saved);
+    });
     int textW = c.textWidth(label, theme::fontCaption());
     Rect tr{r.x + sw + theme::M.px(6), r.y, textW + theme::M.px(2), r.h};
     c.text(tr, label, theme::TextSecondary, theme::fontCaption(),

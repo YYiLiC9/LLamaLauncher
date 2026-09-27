@@ -68,6 +68,11 @@ extern Color ChartGpu;
 extern Color ChartMem;
 extern Color ChartTrack;
 extern Color ChartGrid;
+// Slice for "someone else's process". Deliberately neither purple nor green -
+// it has to read as a third thing next to the VRAM and RAM families, and it
+// has to stay visible on the track: ChartGrid is only a few steps away from
+// ChartTrack and vanished into it.
+extern Color ChartOther;
 
 // ------------------------------------------------------------------ theme ----
 // Follow Windows by default; the user can pin light or dark in the settings.

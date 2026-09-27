@@ -193,7 +193,13 @@ struct BarSegment {
 // the slices are the contents (KV cache, weights, other processes) and the
 // track left showing is the free capacity.
 void stackedBar(Canvas& c, const Rect& r, const BarSegment* segments, size_t count,
-                COLORREF track);
+                COLORREF track, Rect* sliceRects = nullptr, size_t sliceCap = 0);
+
+// A hover bubble: title plus a wrapped body, anchored to `anchor` and kept
+// inside `bounds`. Painted last, over everything else, so it is never clipped
+// by the card it explains.
+void tipBubble(Canvas& c, const Rect& bounds, const Rect& anchor, const std::wstring& title,
+               const std::wstring& body);
 
 // A colour swatch plus caption, laid out left to right. Returns the width used
 // including the trailing gap, so callers can place the next entry after it.

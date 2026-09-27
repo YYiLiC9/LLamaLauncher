@@ -17,7 +17,7 @@ Color Accent, AccentLight, AccentSoft, HoverBg, PressedBg, SelectedBg, FocusRing
 Color TextPrimary, TextSecondary, TextTertiary, TextOnAccent, TextDisabled;
 Color Border, BorderStrong, Divider;
 Color Success, Warning, Danger, Info;
-Color ChartCpu, ChartGpu, ChartMem, ChartTrack, ChartGrid;
+Color ChartCpu, ChartGpu, ChartMem, ChartTrack, ChartGrid, ChartOther;
 
 namespace {
 
@@ -69,6 +69,9 @@ void applyPalette() {
         AccentSoft = soften(Accent, WindowBg, 0.22);
         ChartTrack = Color{62, 62, 62};
         ChartGrid = Color{55, 55, 55};
+        // Slate grey: clearly lighter than the track, clearly not the purple
+        // or the green family.
+        ChartOther = Color{124, 124, 138};
     } else {
         WindowBg = Color{243, 243, 243};
         LayerBg = Color{252, 252, 252};
@@ -95,6 +98,8 @@ void applyPalette() {
         AccentSoft = soften(Accent, CardBg, 0.14);
         ChartTrack = Color{232, 232, 232};
         ChartGrid = Color{240, 240, 240};
+        // The mirror of the dark value: noticeably darker than the track.
+        ChartOther = Color{150, 150, 164};
     }
 
     HoverBg = Color{0, 0, 0};

@@ -37,19 +37,32 @@ int hitIndexAt(const std::vector<Hit>& hits, int x, int y) {
     return -1;
 }
 
+// Topmost slice of the memory card under the pointer, or -1. Slices are
+// registered during the last paint, so this reads one frame old - the same
+// contract as the button hit list.
+int App::sliceTipAt(int x, int y) const {
+    for (size_t i = 0; i < sliceTips_.size(); ++i) {
+        if (sliceTips_[i].rect.contains(x, y)) return (int)i;
+    }
+    return -1;
+}
+
 void App::onMouseMove(int x, int y) {
     int idx = hitIndexAt(hits_, x, y);
     if (idx >= 0 && !hits_[(size_t)idx].enabled) idx = -1;
-    if (idx != hoverIndex_) {
+    int tip = sliceTipAt(x, y);
+    if (idx != hoverIndex_ || tip != sliceHover_) {
         hoverIndex_ = idx;
+        sliceHover_ = tip;
         ::InvalidateRect(hwnd_, nullptr, FALSE);
     }
 }
 
 void App::onMouseLeave() {
-    if (hoverIndex_ != -1 || pressIndex_ != -1) {
+    if (hoverIndex_ != -1 || pressIndex_ != -1 || sliceHover_ != -1) {
         hoverIndex_ = -1;
         pressIndex_ = -1;
+        sliceHover_ = -1;
         ::InvalidateRect(hwnd_, nullptr, FALSE);
     }
 }

@@ -175,6 +175,8 @@ enum class Str {
     MonitorMinimize,
     LogEmpty,
     LogExternal,
+    // Line counter in the log viewer header ("%zu lines").
+    LogLineCount,
     ServerBusy,
     // Read-only strip showing the command the launch would run.
     CommandPreview,
@@ -191,6 +193,26 @@ enum class Str {
     // dozen pixels wide. Placed last-but-one so `ConfigsCount` stays the
     // sentinel the static_assert sanity-checks against.
     ImportExportShort,
+    // ---- memory card slices and their hover bubbles ----
+    // A slice is only ever named for something that was measured or computed;
+    // the rest stays in the "remaining" slice, which is what these labels say.
+    SliceWeights,
+    SliceKv,
+    SliceCompute,
+    SliceWeightsCompute,
+    SliceWorkingSetRam,
+    SliceOtherProcs,
+    SliceFree,
+    // Bubble bodies: one line on where the number came from, so a figure that
+    // had to be derived is never presented as if it had been read off a meter.
+    TipWeightsBody,
+    TipWeightsPartialBody,
+    TipKvBody,
+    TipComputeBody,
+    TipWeightsComputeBody,
+    TipWorkingSetBody,
+    TipOtherBody,
+    TipFreeBody,
     ConfigsCount,
 };
 

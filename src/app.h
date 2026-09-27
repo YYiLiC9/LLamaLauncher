@@ -60,6 +60,36 @@ struct Hit {
     bool enabled = true;
 };
 
+// What the running server's memory is made of, as far as it can be proven from
+// outside the process. Every field is either measured by the monitor, read from
+// the GGUF header, or the remainder of those two - nothing here is a guess, and
+// a component that cannot be pinned down stays inside `other*`.
+struct MemorySlices {
+    uint64_t weightsGpu = 0;   // model weights resident in VRAM
+    uint64_t kvGpu = 0;        // share of the KV cache held in VRAM
+    uint64_t otherGpu = 0;     // rest of the server's VRAM: compute buffers,
+                               // backend runtime, and any weights whose share
+                               // could not be proven
+    uint64_t kvRam = 0;        // share of the cache that did not fit in VRAM
+    uint64_t otherRam = 0;     // rest of the server's working set
+    bool weightsKnown = false; // weightsGpu is a real figure, not a remainder
+    bool kvKnown = false;      // the cache size could be computed at all
+    uint64_t kvTotal = 0;      // whole cache, regardless of where it lives
+    // Inputs behind `kvTotal`, kept so the hover bubble can show its working
+    // instead of just the answer.
+    uint64_t context = 0;      // tokens the cache was sized for
+    std::wstring cacheType;    // quantisation of the K/V tensors
+};
+
+// One hoverable slice of the memory card: where it was drawn plus what the
+// bubble says. Registered while painting, hit-tested on the next mouse move -
+// the same one-frame-late contract as Hit.
+struct SliceTip {
+    shell::Rect rect;
+    std::wstring title;
+    std::wstring body;
+};
+
 class App {
 public:
     static App& instance();
@@ -128,6 +158,8 @@ private:
     // ------------------------------------------------------------------ input
     void onMouseMove(int x, int y);
     void onMouseLeave();
+    // Memory-card slice under the client point, or -1.
+    int sliceTipAt(int x, int y) const;
     // Sidebar entry under the client point, or -1. Used by the right-click menu.
     int configItemAt(const shell::Rect& listArea, POINT clientPt) const;
     void onLButtonDown(int x, int y);
@@ -213,9 +245,10 @@ private:
     // Pulls the model facts out of one captured log line: the offload split
     // and the cache capacity actually allocated.
     void scanLogLine(const std::wstring& line);
-    // KV cache split for the memory card. False when the model metadata or the
-    // offload line is missing, in which case the card must not invent a split.
-    bool kvSplit(uint64_t& kvGpu, uint64_t& kvRam) const;
+    // Composition of the running server's VRAM and RAM for the memory card.
+    // A component that cannot be proven is left folded into the `other*`
+    // remainder rather than spread over the named slices.
+    MemorySlices memorySlices() const;
     // Size of the running model on disk (all shards), 0 when unknown.
     uint64_t modelWeightBytes() const;
 
@@ -223,6 +256,12 @@ private:
     int hoverIndex_ = -1;
     int pressIndex_ = -1;
     bool trackingLeave_ = false;
+
+    // Hover bubbles for the memory card slices. Filled in while painting and
+    // read by the next mouse move; `sliceHover_` is -1 when the pointer is not
+    // over a slice.
+    std::vector<SliceTip> sliceTips_;
+    int sliceHover_ = -1;
 
     int sidebarScroll_ = 0;
     int contentScroll_ = 0;

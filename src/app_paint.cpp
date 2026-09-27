@@ -885,35 +885,141 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     //   others    - total system usage minus the process.
     // The old "dedicated VRAM minus the model file" guess is gone: it went
     // negative the moment the model did not fit the card.
-    uint64_t kvGpu = 0;
-    uint64_t kvRam = 0;
-    bool kvKnown = kvSplit(kvGpu, kvRam);
+    MemorySlices slices = memorySlices();
     uint64_t dedicated = monitor_.gpuDedicatedBytes();
     uint64_t workingSet = monitor_.processWorkingSet();
     uint64_t weights = modelWeightBytes();
+    uint64_t otherProcsGpu = gpu.vramUsed > dedicated ? gpu.vramUsed - dedicated : 0;
+    uint64_t otherProcsRam = mem.used > workingSet ? mem.used - workingSet : 0;
+
+    // One hue per place (purple = VRAM, green = RAM), one shade per kind of
+    // content: the family says "where", the shade says "what".
+    COLORREF weightGpuColor = kGpuColor;
+    COLORREF restGpuColor = theme::blend(kGpuColor, RGB(255, 255, 255), 55);
+    COLORREF kvGpuColor = theme::blend(kGpuColor, RGB(255, 255, 255), 110);
+    COLORREF kvRamColor = theme::blend(kMemColor, RGB(255, 255, 255), 110);
+    // Deliberately a third thing: a grey close to the track disappears there,
+    // and anything in the purple or green family would read as llama-server.
+    COLORREF otherColor = theme::ChartOther;
+    double vramPool = gpu.vramTotal ? (double)gpu.vramTotal : 1.0;
+    double ramPool = mem.total ? (double)mem.total : 1.0;
+
+    // ---- bubbles ----
+    // Every slice says where its number came from. A derived figure that is
+    // presented as if it had been measured is worse than no figure at all, so
+    // the body line spells out the arithmetic (or admits that it cannot be
+    // split).
+    std::wstring kvBody;
+    if (slices.kvKnown) {
+        kvBody = util::format(T(Str::TipKvBody), modelMeta_.layers,
+                              (unsigned long long)slices.context, modelMeta_.headsKv,
+                              gguf::kvHeadDim(modelMeta_), slices.cacheType.c_str());
+    }
+    auto addSlice = [&](uint64_t bytes, double pool, shell::BarSegment* segs,
+                        std::wstring* titles, std::wstring* bodies, size_t& n, size_t cap,
+                        COLORREF color, const wchar_t* title, const std::wstring& body) {
+        if (!bytes || n >= cap) return;
+        segs[n] = shell::BarSegment{(double)bytes / pool, color};
+        titles[n] = title;
+        bodies[n] = body;
+        ++n;
+    };
+
+    constexpr size_t kMaxSlices = 4;
+    shell::BarSegment vramSegs[kMaxSlices]{};
+    std::wstring vramTitles[kMaxSlices], vramBodies[kMaxSlices];
+    size_t vn = 0;
+    if (slices.weightsKnown && slices.weightsGpu) {
+        std::wstring body =
+            offloadKnown_ && offloadedTotal_
+                ? util::format(T(Str::TipWeightsBody), util::humanBytes(weights).c_str(),
+                               offloadedGpu_, offloadedTotal_)
+                : util::format(T(Str::TipWeightsPartialBody), util::humanBytes(weights).c_str());
+        addSlice(slices.weightsGpu, vramPool, vramSegs, vramTitles, vramBodies, vn, kMaxSlices,
+                 weightGpuColor, T(Str::SliceWeights), body);
+    }
+    if (slices.kvGpu)
+        addSlice(slices.kvGpu, vramPool, vramSegs, vramTitles, vramBodies, vn, kMaxSlices,
+                 kvGpuColor, T(Str::SliceKv), kvBody);
+    if (slices.otherGpu)
+        addSlice(slices.otherGpu, vramPool, vramSegs, vramTitles, vramBodies, vn, kMaxSlices,
+                 restGpuColor,
+                 slices.weightsKnown ? T(Str::SliceCompute) : T(Str::SliceWeightsCompute),
+                 slices.weightsKnown ? std::wstring(T(Str::TipComputeBody))
+                                     : std::wstring(T(Str::TipWeightsComputeBody)));
+    if (otherProcsGpu)
+        addSlice(otherProcsGpu, vramPool, vramSegs, vramTitles, vramBodies, vn, kMaxSlices,
+                 otherColor, T(Str::SliceOtherProcs), T(Str::TipOtherBody));
+
+    shell::BarSegment ramSegs[kMaxSlices]{};
+    std::wstring ramTitles[kMaxSlices], ramBodies[kMaxSlices];
+    size_t rn = 0;
+    if (slices.kvRam)
+        addSlice(slices.kvRam, ramPool, ramSegs, ramTitles, ramBodies, rn, kMaxSlices, kvRamColor,
+                 T(Str::SliceKv), kvBody);
+    if (slices.otherRam)
+        addSlice(slices.otherRam, ramPool, ramSegs, ramTitles, ramBodies, rn, kMaxSlices, kMemColor,
+                 T(Str::SliceWorkingSetRam), T(Str::TipWorkingSetBody));
+    if (otherProcsRam)
+        addSlice(otherProcsRam, ramPool, ramSegs, ramTitles, ramBodies, rn, kMaxSlices, otherColor,
+                 T(Str::SliceOtherProcs), T(Str::TipOtherBody));
+
+    // ---- legend ----
+    // Built before the card is sized: the entries wrap, so the card height has
+    // to know how many rows they need.
+    struct LegendItem {
+        COLORREF color = 0;
+        COLORREF second = CLR_INVALID;
+        std::wstring label;
+    };
+    std::vector<LegendItem> legend;
+    if (slices.kvTotal)
+        legend.push_back({kvGpuColor, kvRamColor, T(Str::KvCache)});
+    if (slices.weightsKnown && slices.weightsGpu)
+        legend.push_back({weightGpuColor, CLR_INVALID, T(Str::SliceWeights)});
+    if (slices.otherGpu)
+        legend.push_back({restGpuColor, CLR_INVALID,
+                          slices.weightsKnown ? T(Str::SliceCompute)
+                                              : T(Str::SliceWeightsCompute)});
+    if (slices.otherRam)
+        legend.push_back({kMemColor, CLR_INVALID, T(Str::SliceWorkingSetRam)});
+    if (otherProcsGpu || otherProcsRam)
+        legend.push_back({otherColor, CLR_INVALID, T(Str::SliceOtherProcs)});
+    legend.push_back({theme::ChartTrack, CLR_INVALID, T(Str::SliceFree)});
 
     int rowH = theme::M.px(30);
     int legendH = theme::M.px(22);
     int footH = theme::M.px(20);
-    Rect procCard{x, y, w, theme::M.px(32) + rowH * 2 + theme::M.px(8) + legendH + footH +
-                             theme::M.px(10)};
+    int legendAvail = w - theme::M.px(32);
+    // How many rows the wrapped legend needs, measured the same way it is
+    // drawn - otherwise a six-entry legend overflows the card it sits in.
+    int legendRows = 1;
+    {
+        int used = 0;
+        for (const LegendItem& it : legend) {
+            int ew = theme::M.px(11) + theme::M.px(6) +
+                     c.textWidth(it.label, theme::fontCaption()) + theme::M.px(14);
+            if (used && used + ew > legendAvail) {
+                ++legendRows;
+                used = ew;
+            } else {
+                used += ew;
+            }
+        }
+    }
+    Rect procCard{x, y, w, theme::M.px(32) + rowH * 2 + theme::M.px(8) + legendH * legendRows +
+                             footH + theme::M.px(10)};
     shell::card(c, procCard);
     shell::sectionTitle(c, Rect{procCard.x + theme::M.px(16), procCard.y + theme::M.px(10),
                                 procCard.w - theme::M.px(32), theme::M.px(18)},
                        T(Str::Capacity));
 
     int ry = procCard.y + theme::M.px(32);
-    // One hue per place (purple = VRAM, green = RAM), one shade per kind of
-    // content: the family says "where", the shade says "what".
-    COLORREF kvGpuColor = theme::blend(kGpuColor, RGB(255, 255, 255), 110);
-    COLORREF kvRamColor = theme::blend(kMemColor, RGB(255, 255, 255), 110);
-    COLORREF otherColor = theme::ChartGrid;
-    double vramPool = gpu.vramTotal ? (double)gpu.vramTotal : 1.0;
-    double ramPool = mem.total ? (double)mem.total : 1.0;
 
     auto capacityRow = [&](const wchar_t* label, uint64_t used, uint64_t total,
                            const shell::BarSegment* segs, size_t count, COLORREF accent,
-                           wchar_t glyph) {
+                           wchar_t glyph, const std::wstring* titles,
+                           const std::wstring* bodies, uint64_t pool) {
         Rect r{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH};
         int iconSize = theme::M.px(16);
         if (glyph) c.glyph(Rect{r.x, r.y, iconSize, r.h}, glyph, accent, 14);
@@ -932,7 +1038,25 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         int barW = r.right() - valueW - barX;
         if (barW > 20) {
             Rect bar{barX, r.cy() - theme::M.px(5), barW, theme::M.px(10)};
-            shell::stackedBar(c, bar, segs, count, theme::ChartTrack);
+            Rect sliceRects[kMaxSlices]{};
+            shell::stackedBar(c, bar, segs, count, theme::ChartTrack, sliceRects, kMaxSlices);
+            // Register the slices while they are being drawn: the geometry is
+            // defined here and nowhere else, so a bubble can never point at a
+            // slice that has since moved.
+            int filled = bar.x;
+            for (size_t i = 0; i < count && i < kMaxSlices; ++i) {
+                if (!sliceRects[i].valid()) continue;
+                filled = std::max(filled, sliceRects[i].right());
+                uint64_t bytes = (uint64_t)std::llround(segs[i].fraction * (double)pool);
+                std::wstring title = util::format(L"%s  %s", titles[i].c_str(),
+                                                 util::humanBytes(bytes).c_str());
+                sliceTips_.push_back(SliceTip{sliceRects[i], title, bodies[i]});
+            }
+            // The part of the bar no slice covers is the free capacity, and it
+            // deserves a bubble of its own.
+            if (filled < bar.right())
+                sliceTips_.push_back(SliceTip{Rect{filled, bar.y, bar.right() - filled, bar.h},
+                                              T(Str::SliceFree), T(Str::TipFreeBody)});
         }
         Rect vr{r.right() - valueW, r.y, valueW, r.h};
         c.text(vr, value, theme::TextPrimary, theme::fontBody(),
@@ -940,46 +1064,34 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         ry += rowH + theme::M.px(8);
     };
 
-    // ---- VRAM ----
-    // The computed KV slice is capped by the measured usage, so a model whose
-    // cache was partly paged back can never paint a slice wider than the VRAM
-    // actually in use.
-    uint64_t kvOnGpu = std::min(kvGpu, dedicated);
-    shell::BarSegment vramSegs[3]{
-        {(double)kvOnGpu / vramPool, kvGpuColor},
-        {(double)(dedicated > kvOnGpu ? dedicated - kvOnGpu : 0) / vramPool, kGpuColor},
-        {(double)(gpu.vramUsed > dedicated ? gpu.vramUsed - dedicated : 0) / vramPool,
-         otherColor}};
-    capacityRow(T(Str::MetricVram), gpu.vramUsed, gpu.vramTotal, vramSegs, 3, kGpuColor,
-                shell::glyphs::kGauge);
+    capacityRow(T(Str::MetricVram), gpu.vramUsed, gpu.vramTotal, vramSegs, vn, kGpuColor,
+                shell::glyphs::kGauge, vramTitles, vramBodies, gpu.vramTotal);
 
     // ---- RAM ----
     // Working set, not private commit: the commit charge includes pages that
     // live in the pagefile, so it can exceed physical RAM and overflow the bar.
-    uint64_t kvOnRam = std::min(kvRam, workingSet);
-    shell::BarSegment ramSegs[3]{
-        {(double)kvOnRam / ramPool, kvRamColor},
-        {(double)(workingSet > kvOnRam ? workingSet - kvOnRam : 0) / ramPool, kMemColor},
-        {(double)(mem.used > workingSet ? mem.used - workingSet : 0) / ramPool, otherColor}};
-    capacityRow(T(Str::MetricMemory), mem.used, mem.total, ramSegs, 3, kMemColor,
-                shell::glyphs::kMemoryStick);
+    capacityRow(T(Str::MetricMemory), mem.used, mem.total, ramSegs, rn, kMemColor,
+                shell::glyphs::kMemoryStick, ramTitles, ramBodies, mem.total);
 
     // ---- legend ----
     // A slice that exists on both bars gets a two-tone swatch: purple half for
-    // the VRAM bar, green half for the RAM bar.
+    // the VRAM bar, green half for the RAM bar. Entries wrap onto as many rows
+    // as they need.
     int legendRight = procCard.right() - theme::M.px(16);
-    int lx = procCard.x + theme::M.px(16);
-    if (kvKnown) {
-        lx += shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, kvGpuColor,
-                                 T(Str::KvCache), kvRamColor);
+    int legendLeft = procCard.x + theme::M.px(16);
+    int lx = legendLeft;
+    int ly = ry;
+    for (const LegendItem& it : legend) {
+        int ew = theme::M.px(11) + theme::M.px(6) +
+                 c.textWidth(it.label, theme::fontCaption()) + theme::M.px(14);
+        if (lx > legendLeft && lx + ew > legendRight) {
+            lx = legendLeft;
+            ly += legendH;
+        }
+        lx += shell::legendEntry(c, Rect{lx, ly, legendRight - lx, legendH}, it.color, it.label,
+                                 it.second);
     }
-    lx += shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, kGpuColor,
-                             kvKnown ? T(Str::WeightsCompute) : T(Str::ServerProc), kMemColor);
-    lx += shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, otherColor,
-                             T(Str::OtherProcs));
-    shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, theme::ChartTrack,
-                       T(Str::FreeSpace));
-    ry += legendH;
+    ry = ly + legendH;
 
     // ---- footnote ----
     // The model file is bytes on disk, not bytes in either bar, so it is a line
@@ -990,10 +1102,9 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
     if (weights) {
         foot = util::format(L"%s %s %s", T(Str::ModelWeights), util::humanBytes(weights).c_str(),
                             T(Str::OnDisk));
-        uint64_t kvTotal = kvGpu + kvRam;
-        if (kvKnown && kvTotal)
+        if (slices.kvTotal)
             foot += util::format(L"  ·  %s %s", T(Str::KvCache),
-                                 util::humanBytes(kvTotal).c_str());
+                                 util::humanBytes(slices.kvTotal).c_str());
     } else {
         foot = T(Str::NotAvailable);
     }
@@ -1201,12 +1312,20 @@ void App::paint(HDC target, const Rect& client) {
 
     hits_.clear();
     hits_.reserve(64);
+    sliceTips_.clear();
 
     Frame f = layout(client);
     paintContent(c, f);      // painted first so the bars sit on top at the edges
     paintSidebar(c, f);
     paintTopBar(c, f);
     paintBottomBar(c, f);
+
+    // Hover bubble last: it explains a slice of the memory card, so it has to
+    // sit above both the card and the bars painted after it.
+    if (sliceHover_ >= 0 && sliceHover_ < (int)sliceTips_.size()) {
+        const SliceTip& tip = sliceTips_[(size_t)sliceHover_];
+        shell::tipBubble(c, client, tip.rect, tip.title, tip.body);
+    }
 
     // The search box is a real child window; it is clipped out via
     // WS_CLIPCHILDREN, so nothing here needs to avoid it.

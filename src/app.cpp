@@ -642,37 +642,59 @@ void App::scanLogLine(const std::wstring& line) {
     offloadKnown_ = true;
 }
 
-bool App::kvSplit(uint64_t& kvGpu, uint64_t& kvRam) const {
-    kvGpu = 0;
-    kvRam = 0;
+app::MemorySlices App::memorySlices() const {
+    MemorySlices s;
     const store::Config* cfg = runningConfig();
-    if (!cfg || !modelMeta_.valid) return false;
-    // Prefer the capacity the server reported over the -c we handed it.
-    uint64_t context = ctxKnown_ ? (uint64_t)ctxSlots_ * ctxPerSlot_ : activeContext(*cfg);
-    uint64_t total = gguf::cacheBytes(modelMeta_, context,
-                                      activeValue(*cfg, L"-ctk", L"--cache-type-k"),
-                                      activeValue(*cfg, L"-ctv", L"--cache-type-v"));
-    if (!total) return false;
+    const uint64_t dedicated = monitor_.gpuDedicatedBytes();
+    const uint64_t workingSet = monitor_.processWorkingSet();
+    const uint64_t weights = modelWeightBytes();
 
-    if (offloadKnown_ && offloadedTotal_) {
-        // Every layer owns an identical slice of the cache, so the share on the
-        // GPU is exactly the share of layers that were offloaded.
-        uint64_t gpu = total * offloadedGpu_ / offloadedTotal_;
-        kvGpu = gpu;
-        kvRam = total - gpu;
-        return true;
+    // ---- how much of the model is in VRAM ----
+    // Two ways to know: the offload line some builds still print, or the plain
+    // observation that a GPU holding fewer bytes than the file cannot be
+    // holding the whole file. Recent builds print neither a buffer size nor an
+    // offload line, so the second test is what usually runs - and when even it
+    // fails (partially offloaded model) the weight slice is simply not drawn.
+    if (weights) {
+        if (offloadKnown_ && offloadedTotal_) {
+            s.weightsGpu = weights * offloadedGpu_ / offloadedTotal_;
+            s.weightsKnown = true;
+        } else if (dedicated >= weights) {
+            s.weightsGpu = weights;
+            s.weightsKnown = true;
+        }
     }
-    // No offload line (recent builds dropped it). Fall back to a test that can
-    // only ever say "definitely on the GPU": the process cannot be holding
-    // weights *and* the whole cache in VRAM unless the cache is there too.
-    // When it cannot be settled the caller must show one unsliced block rather
-    // than a made-up split.
-    uint64_t weights = modelWeightBytes();
-    if (weights && monitor_.gpuDedicatedBytes() >= weights + total) {
-        kvGpu = total;
-        return true;
+
+    // ---- the cache ----
+    if (cfg && modelMeta_.valid) {
+        // Prefer the capacity the server reported over the -c we handed it.
+        uint64_t context = ctxKnown_ ? (uint64_t)ctxSlots_ * ctxPerSlot_ : activeContext(*cfg);
+        uint64_t total = gguf::cacheBytes(modelMeta_, context,
+                                          activeValue(*cfg, L"-ctk", L"--cache-type-k"),
+                                          activeValue(*cfg, L"-ctv", L"--cache-type-v"));
+        if (total) {
+            s.kvKnown = true;
+            s.kvTotal = total;
+            s.context = context;
+            s.cacheType = activeValue(*cfg, L"-ctk", L"--cache-type-k");
+            if (s.cacheType.empty()) s.cacheType = L"f16";
+            // llama.cpp fills the device before it spills, so the cache takes
+            // whatever VRAM the weights left - capped by the cache's own size.
+            // Whatever is left over after that is buffers, and whatever did not
+            // fit has to be living in RAM.
+            uint64_t room = dedicated > s.weightsGpu ? dedicated - s.weightsGpu : 0;
+            s.kvGpu = std::min(total, room);
+            s.kvRam = total - s.kvGpu;
+        }
     }
-    return false;
+
+    // ---- remainders ----
+    // These are measured, not allocated by rule: they are whatever the monitor
+    // reports that the named slices do not account for.
+    uint64_t taken = s.weightsGpu + s.kvGpu;
+    s.otherGpu = dedicated > taken ? dedicated - taken : 0;
+    s.otherRam = workingSet > s.kvRam ? workingSet - s.kvRam : 0;
+    return s;
 }
 
 uint64_t App::modelWeightBytes() const {
