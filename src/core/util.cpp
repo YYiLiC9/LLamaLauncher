@@ -178,8 +178,11 @@ uint64_t modelFileBytes(const std::wstring& modelPath) {
     std::wstring stem = modelPath.substr(0, modelPath.size() - m.length(0));
     for (int i = 1; i <= count; ++i) {
         if (i == first) continue;
-        wchar_t idx[16];
-        ::swprintf(idx, 16, L"-%05d-of-%05d.gguf", i, count);
+        // util::format, not a swprintf into a fixed buffer: "-%05d-of-%05d.gguf"
+        // needs 19 characters plus the terminator, which silently overflowed a
+        // 16-element array and left every shard after the first unread (a 10.5 GB
+        // 3-shard model then reported 4 GB).
+        std::wstring idx = util::format(L"-%05d-of-%05d.gguf", i, count);
         total += sizeOf(stem + idx);
     }
     return total;

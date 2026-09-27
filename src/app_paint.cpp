@@ -873,64 +873,133 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
 
     y = chartCard.bottom() + theme::M.gap;
 
-    // ---- process footprint ----
-    // A truthful breakdown for the mmap era, measured entirely from outside
-    // the process (llama.cpp no longer prints buffer sizes):
-    //   模型权重            - the .gguf files on disk, all shards summed
-    //   KV 缓存 + 计算缓冲   - dedicated VRAM minus the weights; only known
-    //                          when the weights fit the GPU. When they do not
-    //                          (mixed offload) the split is unknowable from
-    //                          outside, so the row is skipped.
-    //   显存总占用           - the process's own dedicated VRAM (PDH counter)
-    //   运行时（私有提交）   - private commit (CPU-side weights, KV staging)
-    //   模型（合计）         - resident working set
-    bool runningNow = processAlive();
-    uint64_t weights = runningNow ? util::modelFileBytes(cfg.modelFile()) : 0;
-    double dedicated = (double)monitor_.gpuDedicatedBytes();
-    double kvBuf = std::max(0.0, dedicated - (double)weights);
-    // KV is only separable when every weight byte went to the GPU. A 19 GB
-    // model on a 16 GB card ends up mixed (part of the weights stay in RAM,
-    // counted in the private commit instead), and "dedicated - weights" goes
-    // negative - hiding the row beats showing a fake zero.
-    bool kvKnown = runningNow && weights > 0 && dedicated >= (double)weights;
-    int rows = runningNow ? (kvKnown ? 5 : 4) : 1;
-    Rect procCard{x, y, w, theme::M.px(32) + rows * theme::M.px(24) +
-                             (rows - 1) * theme::M.px(6) + theme::M.px(10)};
+    // ---- capacity: one bar per place bytes can live ----
+    // The bar *is* the capacity, so what the track still shows is the headroom
+    // the next model (or a longer context) has to fit into - which a row of
+    // bare numbers never made visible.
+    //
+    // Accuracy rule: every slice is either measured or computed, never guessed.
+    //   KV cache  - computed from the GGUF metadata (layers, heads, head dim)
+    //               and the server's own "offloaded X/Y layers to GPU" line.
+    //   the rest  - the measured remainder of the process's own usage.
+    //   others    - total system usage minus the process.
+    // The old "dedicated VRAM minus the model file" guess is gone: it went
+    // negative the moment the model did not fit the card.
+    uint64_t kvGpu = 0;
+    uint64_t kvRam = 0;
+    bool kvKnown = kvSplit(kvGpu, kvRam);
+    uint64_t dedicated = monitor_.gpuDedicatedBytes();
+    uint64_t workingSet = monitor_.processWorkingSet();
+    uint64_t weights = modelWeightBytes();
+
+    int rowH = theme::M.px(30);
+    int legendH = theme::M.px(22);
+    int footH = theme::M.px(20);
+    Rect procCard{x, y, w, theme::M.px(32) + rowH * 2 + theme::M.px(8) + legendH + footH +
+                             theme::M.px(10)};
     shell::card(c, procCard);
     shell::sectionTitle(c, Rect{procCard.x + theme::M.px(16), procCard.y + theme::M.px(10),
                                 procCard.w - theme::M.px(32), theme::M.px(18)},
-                       T(Str::MetricMemory));
+                       T(Str::Capacity));
 
     int ry = procCard.y + theme::M.px(32);
-    int rowH = theme::M.px(24);
-    double ramPool = mem.total ? (double)mem.total : 1.0;
+    // One hue per place (purple = VRAM, green = RAM), one shade per kind of
+    // content: the family says "where", the shade says "what".
+    COLORREF kvGpuColor = theme::blend(kGpuColor, RGB(255, 255, 255), 110);
+    COLORREF kvRamColor = theme::blend(kMemColor, RGB(255, 255, 255), 110);
+    COLORREF otherColor = theme::ChartGrid;
     double vramPool = gpu.vramTotal ? (double)gpu.vramTotal : 1.0;
-    auto addRow = [&](const wchar_t* label, const std::wstring& value, double frac,
-                      COLORREF color, wchar_t glyph) {
-        shell::meterRow(c, Rect{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32),
-                                rowH},
-                        label, value, frac, color, glyph);
-        ry += rowH + theme::M.px(6);
+    double ramPool = mem.total ? (double)mem.total : 1.0;
+
+    auto capacityRow = [&](const wchar_t* label, uint64_t used, uint64_t total,
+                           const shell::BarSegment* segs, size_t count, COLORREF accent,
+                           wchar_t glyph) {
+        Rect r{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), rowH};
+        int iconSize = theme::M.px(16);
+        if (glyph) c.glyph(Rect{r.x, r.y, iconSize, r.h}, glyph, accent, 14);
+        int labelW = theme::M.px(56);
+        Rect lr{r.x + iconSize + theme::M.px(8), r.y, labelW, r.h};
+        c.text(lr, label, theme::TextSecondary, theme::fontSmall(),
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        // "used / total", measured: a fixed value box silently clipped once the
+        // numbers grew at 175% DPI.
+        std::wstring value = total ? util::format(L"%s / %s", util::humanBytes(used).c_str(),
+                                                 util::humanBytes(total).c_str())
+                                   : util::humanBytes(used);
+        int valueW = c.textWidth(value, theme::fontBody()) + theme::M.px(8);
+        int barX = lr.right() + theme::M.px(10);
+        int barW = r.right() - valueW - barX;
+        if (barW > 20) {
+            Rect bar{barX, r.cy() - theme::M.px(5), barW, theme::M.px(10)};
+            shell::stackedBar(c, bar, segs, count, theme::ChartTrack);
+        }
+        Rect vr{r.right() - valueW, r.y, valueW, r.h};
+        c.text(vr, value, theme::TextPrimary, theme::fontBody(),
+               DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        ry += rowH + theme::M.px(8);
     };
 
-    if (rows > 1) {
-        addRow(T(Str::ModelWeights), util::humanBytes(weights),
-               (double)weights / vramPool, kGpuColor, shell::glyphs::kGauge);
-        if (kvKnown) {
-            addRow(T(Str::KvBuf), util::humanBytes((uint64_t)kvBuf),
-                   kvBuf / vramPool, kMemColor, shell::glyphs::kMemoryStick);
-        }
-        addRow(T(Str::MetricVram), util::humanBytes((uint64_t)dedicated),
-               dedicated / vramPool, kGpuColor, shell::glyphs::kGauge);
-        addRow(T(Str::RuntimeCommit), util::humanBytes(monitor_.processPrivateCommit()),
-               (double)monitor_.processPrivateCommit() / ramPool, kMemColor,
-               shell::glyphs::kChip);
+    // ---- VRAM ----
+    // The computed KV slice is capped by the measured usage, so a model whose
+    // cache was partly paged back can never paint a slice wider than the VRAM
+    // actually in use.
+    uint64_t kvOnGpu = std::min(kvGpu, dedicated);
+    shell::BarSegment vramSegs[3]{
+        {(double)kvOnGpu / vramPool, kvGpuColor},
+        {(double)(dedicated > kvOnGpu ? dedicated - kvOnGpu : 0) / vramPool, kGpuColor},
+        {(double)(gpu.vramUsed > dedicated ? gpu.vramUsed - dedicated : 0) / vramPool,
+         otherColor}};
+    capacityRow(T(Str::MetricVram), gpu.vramUsed, gpu.vramTotal, vramSegs, 3, kGpuColor,
+                shell::glyphs::kGauge);
+
+    // ---- RAM ----
+    // Working set, not private commit: the commit charge includes pages that
+    // live in the pagefile, so it can exceed physical RAM and overflow the bar.
+    uint64_t kvOnRam = std::min(kvRam, workingSet);
+    shell::BarSegment ramSegs[3]{
+        {(double)kvOnRam / ramPool, kvRamColor},
+        {(double)(workingSet > kvOnRam ? workingSet - kvOnRam : 0) / ramPool, kMemColor},
+        {(double)(mem.used > workingSet ? mem.used - workingSet : 0) / ramPool, otherColor}};
+    capacityRow(T(Str::MetricMemory), mem.used, mem.total, ramSegs, 3, kMemColor,
+                shell::glyphs::kMemoryStick);
+
+    // ---- legend ----
+    // A slice that exists on both bars gets a two-tone swatch: purple half for
+    // the VRAM bar, green half for the RAM bar.
+    int legendRight = procCard.right() - theme::M.px(16);
+    int lx = procCard.x + theme::M.px(16);
+    if (kvKnown) {
+        lx += shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, kvGpuColor,
+                                 T(Str::KvCache), kvRamColor);
     }
-    double wsFrac = mem.total ? (double)monitor_.processWorkingSet() / (double)mem.total : 0.0;
-    addRow(T(Str::MetricModel),
-           runningNow ? util::humanBytes(monitor_.processWorkingSet())
-                   : std::wstring(T(Str::NotAvailable)),
-           wsFrac, kCpuColor, shell::glyphs::kChip);
+    lx += shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, kGpuColor,
+                             kvKnown ? T(Str::WeightsCompute) : T(Str::ServerProc), kMemColor);
+    lx += shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, otherColor,
+                             T(Str::OtherProcs));
+    shell::legendEntry(c, Rect{lx, ry, legendRight - lx, legendH}, theme::ChartTrack,
+                       T(Str::FreeSpace));
+    ry += legendH;
+
+    // ---- footnote ----
+    // The model file is bytes on disk, not bytes in either bar, so it is a line
+    // of text rather than a slice - this is also why it never "became 0" again:
+    // it is read from the configuration the *running* server belongs to.
+    Rect footR{procCard.x + theme::M.px(16), ry, procCard.w - theme::M.px(32), footH};
+    std::wstring foot;
+    if (weights) {
+        foot = util::format(L"%s %s %s", T(Str::ModelWeights), util::humanBytes(weights).c_str(),
+                            T(Str::OnDisk));
+        uint64_t kvTotal = kvGpu + kvRam;
+        if (kvKnown && kvTotal)
+            foot += util::format(L"  ·  %s %s", T(Str::KvCache),
+                                 util::humanBytes(kvTotal).c_str());
+    } else {
+        foot = T(Str::NotAvailable);
+    }
+    c.text(footR, util::ellipsize(c.dc(), foot, footR.w, theme::fontCaption()),
+           theme::TextTertiary, theme::fontCaption(),
+           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     y = procCard.bottom() + theme::M.gap;
 

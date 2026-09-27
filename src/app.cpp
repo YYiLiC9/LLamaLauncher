@@ -7,6 +7,8 @@
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 
 #include <algorithm>
+#include <cstdio>
+#include <cwchar>
 
 #include "core/i18n.h"
 #include "core/paths.h"
@@ -561,6 +563,124 @@ int App::configItemAt(const shell::Rect& listArea, POINT clientPt) const {
     return idx;
 }
 
+// ------------------------------------------------------------- model facts --
+// Everything below exists so the memory card can show a *computed* KV split
+// instead of the old "dedicated VRAM minus the model file" guess, which went
+// negative as soon as the model did not fit the card.
+namespace {
+
+// Context size that actually reaches llama-server. Only an enabled -c row ends
+// up on the command line, so a defaulted but switched-off value must not be
+// used - it would double the reported cache.
+uint64_t activeContext(const store::Config& cfg) {
+    for (const store::Param& p : cfg.params) {
+        if (p.enabled && (p.flag == L"-c" || p.flag == L"--ctx-size")) {
+            uint64_t v = ::_wcstoui64(p.value.c_str(), nullptr, 10);
+            if (v) return v;
+        }
+    }
+    return 4096;  // llama.cpp's own default when -c is not passed at all
+}
+
+// Same rule for the KV quantisation: switched-off rows are not on the command.
+std::wstring activeValue(const store::Config& cfg, const std::wstring& flag,
+                         const std::wstring& longFlag) {
+    for (const store::Param& p : cfg.params) {
+        if (p.enabled && (p.flag == flag || p.flag == longFlag)) return p.value;
+    }
+    return std::wstring();
+}
+
+}  // namespace
+
+const store::Config* App::runningConfig() const {
+    if (runningConfigId_.empty()) return nullptr;
+    return store_.find(runningConfigId_);
+}
+
+void App::loadModelMeta(const store::Config& cfg) {
+    resetModelMeta();
+    // Header only: one 8 MB read, never the tensor data.
+    modelMeta_ = gguf::readMeta(cfg.modelFile());
+}
+
+void App::resetModelMeta() {
+    modelMeta_ = gguf::Meta{};
+    offloadedGpu_ = 0;
+    offloadedTotal_ = 0;
+    offloadKnown_ = false;
+    ctxSlots_ = 0;
+    ctxPerSlot_ = 0;
+    ctxKnown_ = false;
+}
+
+void App::scanLogLine(const std::wstring& line) {
+    // Cache capacity: "initializing, n_slots = 4, n_ctx_slot = 32768".
+    if (!ctxKnown_) {
+        size_t at = line.find(L"n_slots =");
+        if (at != std::wstring::npos) {
+            unsigned slots = 0;
+            unsigned perSlot = 0;
+            if (::swscanf_s(line.c_str() + at, L"n_slots = %u, n_ctx_slot = %u", &slots,
+                            &perSlot) == 2 &&
+                slots && perSlot) {
+                ctxSlots_ = slots;
+                ctxPerSlot_ = perSlot;
+                ctxKnown_ = true;
+            }
+        }
+    }
+    if (offloadKnown_) return;
+    // "offloaded 41/48 layers to GPU" - printed by older builds only.
+    size_t at = line.find(L"offloaded");
+    if (at == std::wstring::npos) return;
+    unsigned gpu = 0;
+    unsigned total = 0;
+    if (::swscanf_s(line.c_str() + at, L"offloaded %u/%u", &gpu, &total) != 2 || total == 0) return;
+    offloadedGpu_ = gpu;
+    offloadedTotal_ = total;
+    offloadKnown_ = true;
+}
+
+bool App::kvSplit(uint64_t& kvGpu, uint64_t& kvRam) const {
+    kvGpu = 0;
+    kvRam = 0;
+    const store::Config* cfg = runningConfig();
+    if (!cfg || !modelMeta_.valid) return false;
+    // Prefer the capacity the server reported over the -c we handed it.
+    uint64_t context = ctxKnown_ ? (uint64_t)ctxSlots_ * ctxPerSlot_ : activeContext(*cfg);
+    uint64_t total = gguf::cacheBytes(modelMeta_, context,
+                                      activeValue(*cfg, L"-ctk", L"--cache-type-k"),
+                                      activeValue(*cfg, L"-ctv", L"--cache-type-v"));
+    if (!total) return false;
+
+    if (offloadKnown_ && offloadedTotal_) {
+        // Every layer owns an identical slice of the cache, so the share on the
+        // GPU is exactly the share of layers that were offloaded.
+        uint64_t gpu = total * offloadedGpu_ / offloadedTotal_;
+        kvGpu = gpu;
+        kvRam = total - gpu;
+        return true;
+    }
+    // No offload line (recent builds dropped it). Fall back to a test that can
+    // only ever say "definitely on the GPU": the process cannot be holding
+    // weights *and* the whole cache in VRAM unless the cache is there too.
+    // When it cannot be settled the caller must show one unsliced block rather
+    // than a made-up split.
+    uint64_t weights = modelWeightBytes();
+    if (weights && monitor_.gpuDedicatedBytes() >= weights + total) {
+        kvGpu = total;
+        return true;
+    }
+    return false;
+}
+
+uint64_t App::modelWeightBytes() const {
+    const store::Config* cfg = runningConfig();
+    if (!cfg) return 0;
+    return util::modelFileBytes(cfg->modelFile());
+}
+
 // ------------------------------------------------------------------- actions --
 bool App::startConfig(const std::wstring& id) {
     const store::Config* cfg = store_.find(id);
@@ -607,6 +727,7 @@ bool App::startConfig(const std::wstring& id) {
 
     runStarted_ = util::nowSeconds();
     runningConfigId_ = id;
+    loadModelMeta(*cfg);
     selectedId_ = id;
     view_ = View::Running;
     contentScroll_ = 0;
@@ -632,6 +753,7 @@ void App::stopServer() {
     logTail_.clear();
 
     runningConfigId_.clear();
+    resetModelMeta();
     // The run is over, so the resource view has nothing left to show - fall
     // back to the selected configuration (or the welcome screen).
     if (view_ == View::Running) {
@@ -788,7 +910,12 @@ void App::onTimer() {
     // window always has the complete output.
     std::vector<std::wstring> fresh = server_.takeOutput();
     if (!fresh.empty()) {
-        for (auto& line : fresh) logTail_.push_back(std::move(line));
+        for (auto& line : fresh) {
+            // The startup log is the only place the server says how much cache
+            // it allocated and how many layers reached the GPU.
+            scanLogLine(line);
+            logTail_.push_back(std::move(line));
+        }
         while (logTail_.size() > 800) logTail_.erase(logTail_.begin());
         logDirty_ = true;
     }
@@ -799,6 +926,7 @@ void App::onTimer() {
         // The process ended on its own (crash or exit): the resource view has
         // nothing to monitor any more, so leave it like stopServer does.
         runningConfigId_.clear();
+        resetModelMeta();
         if (view_ == View::Running) {
             setView(selected() ? View::Detail : View::Welcome);
             contentScroll_ = 0;

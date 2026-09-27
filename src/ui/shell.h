@@ -181,4 +181,26 @@ void metricTile(Canvas& c, const Rect& r, const std::wstring& label, const std::
 void meterRow(Canvas& c, const Rect& r, const std::wstring& label, const std::wstring& value,
               double fraction, COLORREF accent, wchar_t glyph);
 
+// One slice of a stacked bar. `fraction` is a share of the *whole* bar, so the
+// caller owns the normalisation (the bar is the capacity, the slices are what
+// fills it).
+struct BarSegment {
+    double fraction = 0.0;
+    COLORREF color = 0;
+};
+
+// A capacity bar split into coloured slices - used by the memory card, where
+// the slices are the contents (KV cache, weights, other processes) and the
+// track left showing is the free capacity.
+void stackedBar(Canvas& c, const Rect& r, const BarSegment* segments, size_t count,
+                COLORREF track);
+
+// A colour swatch plus caption, laid out left to right. Returns the width used
+// including the trailing gap, so callers can place the next entry after it.
+// `secondColor` splits the swatch in two for content that appears on both bars
+// of a pair (purple on the VRAM bar, green on the RAM bar) - pass CLR_INVALID
+// for a single-colour entry.
+int legendEntry(Canvas& c, const Rect& r, COLORREF color, const std::wstring& label,
+                COLORREF secondColor = CLR_INVALID);
+
 }  // namespace shell

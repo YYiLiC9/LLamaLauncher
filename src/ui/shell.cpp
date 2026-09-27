@@ -560,4 +560,56 @@ void meterRow(Canvas& c, const Rect& r, const std::wstring& label, const std::ws
            DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
+void stackedBar(Canvas& c, const Rect& r, const BarSegment* segments, size_t count,
+                COLORREF track) {
+    if (r.w <= 0 || r.h <= 0) return;
+    int radius = std::min(theme::M.radiusSmall, r.h / 2);
+    c.fillRound(r, radius, track);
+
+    // Segments are plain rectangles, so they would square off the rounded ends.
+    // Clipping to the same rounded shape keeps the corners while letting each
+    // slice be drawn with a cheap fill.
+    HDC dc = c.dc();
+    int saved = ::SaveDC(dc);
+    HRGN clip = ::CreateRoundRectRgn(r.x, r.y, r.right(), r.bottom(), radius * 2, radius * 2);
+    if (clip) ::ExtSelectClipRgn(dc, clip, RGN_AND);
+
+    double used = 0.0;
+    int x = r.x;
+    for (size_t i = 0; i < count; ++i) {
+        double f = std::clamp(segments[i].fraction, 0.0, 1.0 - used);
+        if (f <= 0) continue;
+        int w = (int)std::lround(f * (double)r.w);
+        if (w <= 0) continue;
+        int x2 = std::min(x + w, r.right());
+        c.fill(Rect{x, r.y, x2 - x, r.h}, segments[i].color);
+        // A hairline in the track colour keeps two similar shades readable.
+        if (x2 < r.right()) c.fill(Rect{x2, r.y, 1, r.h}, track);
+        x = x2;
+        used += f;
+        if (x >= r.right()) break;
+    }
+
+    if (clip) ::DeleteObject(clip);
+    ::RestoreDC(dc, saved);
+}
+
+int legendEntry(Canvas& c, const Rect& r, COLORREF color, const std::wstring& label,
+                COLORREF secondColor) {
+    int sw = theme::M.px(10);
+    Rect box{r.x, r.cy() - sw / 2, sw, sw};
+    if (secondColor == CLR_INVALID) {
+        c.fillRound(box, theme::M.radiusSmall, color);
+    } else {
+        c.fillRound(box, theme::M.radiusSmall, color);
+        c.fillRound(Rect{box.x + sw / 2, box.y, sw - sw / 2, sw}, theme::M.radiusSmall,
+                    secondColor);
+    }
+    int textW = c.textWidth(label, theme::fontCaption());
+    Rect tr{r.x + sw + theme::M.px(6), r.y, textW + theme::M.px(2), r.h};
+    c.text(tr, label, theme::TextSecondary, theme::fontCaption(),
+           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    return sw + theme::M.px(6) + textW + theme::M.px(14);
+}
+
 }  // namespace shell

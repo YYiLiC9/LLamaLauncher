@@ -157,8 +157,18 @@ enum class Str {
     ChatNeedsServer,
     CloseToTray,
     ModelWeights,
-    RuntimeCommit,
-    KvBuf,
+    // Memory card: the KV slice is computed from the GGUF metadata, so it is
+    // labelled as exactly that - not as "KV + compute" any more.
+    KvCache,
+    WeightsCompute,
+    OtherProcs,
+    FreeSpace,
+    // "(disk)" qualifier for the model-weights footnote.
+    OnDisk,
+    // Legend label for the unsplit slice when the KV size cannot be computed.
+    ServerProc,
+    // Title of the two-bar capacity card (VRAM + RAM).
+    Capacity,
     TrayOpen,
     TrayQuit,
     // Resource monitor: shrink-to-ball button; empty-log placeholders.

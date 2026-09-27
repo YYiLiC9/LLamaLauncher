@@ -30,6 +30,7 @@ add_executable(LlamaLauncher WIN32
     src/core/store.cpp
     src/core/process.cpp
     src/core/monitor.cpp
+    src/core/gguf.cpp
 
     src/ui/theme.cpp
     src/ui/shell.cpp

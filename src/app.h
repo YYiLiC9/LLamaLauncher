@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/gguf.h"
 #include "core/monitor.h"
 #include "core/process.h"
 #include "core/store.h"
@@ -187,6 +188,36 @@ private:
 
     std::vector<std::wstring> logTail_;
     bool logDirty_ = false;
+
+    // ---- model facts for the running server ----
+    // The KV cache cannot be measured from outside the process, but it can be
+    // computed: the GGUF header supplies the layer and head counts, and the
+    // startup log says how many layers reached the GPU. Read once per run so
+    // the memory card shows a calculated split rather than a guess.
+    gguf::Meta modelMeta_;
+    uint32_t offloadedGpu_ = 0;     // X of "offloaded X/Y layers to GPU"
+    uint32_t offloadedTotal_ = 0;   // Y of the same line
+    bool offloadKnown_ = false;
+    // Recent builds stopped printing the offload line, but they do print
+    // "n_slots = N, n_ctx_slot = M", which is the cache capacity the server
+    // really allocated - better evidence than the -c value we passed it.
+    uint32_t ctxSlots_ = 0;
+    uint32_t ctxPerSlot_ = 0;
+    bool ctxKnown_ = false;
+
+    // The configuration the running server belongs to (null for an adopted
+    // external process, whose model we cannot know).
+    const store::Config* runningConfig() const;
+    void loadModelMeta(const store::Config& cfg);
+    void resetModelMeta();
+    // Pulls the model facts out of one captured log line: the offload split
+    // and the cache capacity actually allocated.
+    void scanLogLine(const std::wstring& line);
+    // KV cache split for the memory card. False when the model metadata or the
+    // offload line is missing, in which case the card must not invent a split.
+    bool kvSplit(uint64_t& kvGpu, uint64_t& kvRam) const;
+    // Size of the running model on disk (all shards), 0 when unknown.
+    uint64_t modelWeightBytes() const;
 
     std::vector<Hit> hits_;
     int hoverIndex_ = -1;
