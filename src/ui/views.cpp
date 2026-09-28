@@ -438,12 +438,6 @@ protected:
         addHit(Rect{tseg.x + third * 2, tseg.y, tseg.w - third * 2, tseg.h}, ID_THEME_DARK);
         segmented(c, tseg, {T(Str::ThemeSystem), T(Str::ThemeLight), T(Str::ThemeDark)},
                   (int)themeMode_, themeHover(), themePress());
-        // The choice no longer previews, so say when it lands - otherwise the
-        // control looks like it did nothing.
-        c.text(Rect{tseg.right() + theme::M.px(12), tseg.y,
-                    w - (tseg.right() - x) - theme::M.px(12), tseg.h},
-               T(Str::ThemeApplyHint), theme::TextTertiary, theme::fontCaption(),
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
         // Row 3: tray behaviour. Closing the window can hide it to the tray
         // instead of quitting, so a running server survives a stray click on X.
@@ -572,19 +566,17 @@ protected:
 
     void onClick(int id) override {
         switch (id) {
+            // Language and appearance are both recorded only. Nothing here is
+            // applied live: the owner reads the stored settings once Save is
+            // pressed, so every control in this dialog behaves the same way.
             case ID_LANG_ZH:
                 language_ = Lang::Zh;
-                i18n::set(language_);   // preview immediately
                 break;
             case ID_LANG_EN:
                 language_ = Lang::En;
-                i18n::set(language_);
                 break;
 
-            // Appearance is only recorded here. Switching the palette live
-            // meant Cancel left the app in the previewed theme while the
-            // stored setting still said the old one - reopening the dialog
-            // then highlighted a different option than the one in effect.
+            // Appearance is only recorded here, like the language above.
             // The owner applies the choice when it saves.
             case ID_THEME_SYSTEM:
                 themeMode_ = theme::ThemeMode::System;
@@ -658,13 +650,15 @@ protected:
                 store_.settings().backupDir = backupDir_;
                 store_.settings().closeToTray = closeToTray_;
                 store_.saveSettings();
+                // Everything applies at once, on Save: the language swap is
+                // the last piece that used to go live from its control.
+                i18n::set(language_);
                 close(DialogResult::Ok);
                 return;
             }
 
             case ID_CANCEL:
-                // Roll back the live language preview.
-                i18n::set(util::iequals(store_.settings().language, L"en") ? Lang::En : Lang::Zh);
+                // Nothing was applied live, so there is nothing to roll back.
                 close(DialogResult::Cancel);
                 return;
 
@@ -2464,6 +2458,7 @@ protected:
             measuredW_ = wrapW;
             measuredCount_ = lines.size();
             measuredCpl_ = cpl;
+            charW_ = charW;
         }
         innerRect_ = inner;
         // Pixel offset rather than a page index: the log grows a line at a
@@ -2481,9 +2476,10 @@ protected:
         // Text never leaves the console box. Without a clip region the rows of
         // a line that is only partly scrolled in were drawn straight across
         // the frame below (and above) - the "log overflows its border" effect.
-        // The highlight for selected lines is drawn inside the same region.
-        int selLo = -1, selHi = -1;
-        selectionRange(selLo, selHi);
+        // The selection highlight is drawn inside the same region.
+        LogPos lo, hi;
+        bool hasSel = selectionRange(lo, hi);
+        int rowH = theme::M.px(18);
         int saved = ::SaveDC(c.dc());
         ::IntersectClipRect(c.dc(), inner.x, inner.y, inner.right(), inner.bottom());
         for (size_t i = 0; i < lines.size(); ++i) {
@@ -2492,7 +2488,6 @@ protected:
             acc += h;
             if (top + h <= 0) continue;         // entirely above the view
             if (top >= inner.h) break;          // entirely below it
-            bool selected = (int)i >= selLo && (int)i <= selHi;
             COLORREF col = theme::TextSecondary;
             std::wstring low = util::lower(lines[i]);
             if (util::contains(low, L"error") || util::contains(low, L"failed"))
@@ -2502,10 +2497,35 @@ protected:
                 col = theme::Success;
             // Draw the entry chunk by chunk (mono grid): one chunk per row.
             const std::wstring& s = lines[i];
-            int rows = (int)((s.size() + measuredCpl_ - 1) / measuredCpl_);
+            int len = (int)s.size();
+            // Selected character range within this unwrapped line, or empty.
+            int c0 = 0, c1 = 0;
+            if (hasSel) {
+                if (i < (size_t)lo.line || i > (size_t)hi.line) {
+                    // none
+                } else if (lo.line == hi.line) {
+                    c0 = lo.ch; c1 = hi.ch;
+                } else if ((int)i == lo.line) {
+                    c0 = lo.ch; c1 = len;
+                } else if ((int)i == hi.line) {
+                    c0 = 0; c1 = hi.ch;
+                } else {
+                    c0 = 0; c1 = len;
+                }
+                c0 = std::clamp(c0, 0, len);
+                c1 = std::clamp(c1, 0, len);
+            }
+            int rows = (int)((len + measuredCpl_ - 1) / measuredCpl_);
             for (int cj = 0; cj < rows; ++cj) {
-                Rect lr{inner.x, inner.y + top + cj * theme::M.px(18), inner.w, theme::M.px(18)};
-                if (selected) c.fill(lr, theme::SelectedBg);
+                Rect lr{inner.x, inner.y + top + cj * rowH, inner.w, rowH};
+                // Intersect the row's character span with the selection.
+                int rs = cj * measuredCpl_;
+                int re = std::min(len, rs + measuredCpl_);
+                if (c0 < c1 && re > c0 && rs < c1) {
+                    int cs = std::max(rs, c0), ce = std::min(re, c1);
+                    c.fill(Rect{inner.x + (cs - rs) * charW_, lr.y, (ce - cs) * charW_, rowH},
+                           theme::SelectedBg);
+                }
                 c.text(lr, s.substr((size_t)cj * measuredCpl_, measuredCpl_), col,
                        theme::fontMono(), DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
             }
@@ -2553,7 +2573,7 @@ protected:
         // clipboard (a 200 ms timer keeps this fading out on its own).
         Rect hint{theme::M.px(16), copyBtn.y, copyBtn.x - theme::M.px(26), copyBtn.h};
         if (::GetTickCount64() < copiedUntil_)
-            c.text(hint, util::format(T(Str::LogCopiedCount), copiedLines_), theme::Success,
+            c.text(hint, util::format(T(Str::LogCopiedChars), copiedChars_), theme::Success,
                    theme::fontCaption(),
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         else
@@ -2585,16 +2605,18 @@ protected:
             dragScroll_ = scroll_;
             return;
         }
-        // Anywhere else in the console starts a line selection, which is what
-        // Ctrl+C (or the copy button) then puts on the clipboard. Points over
-        // a registered control keep their click behaviour.
-        if (hitAt(x, y) >= 0 || !innerRect_.contains(x, y)) {
-            selAnchor_ = selHead_ = -1;
+        // A registered control keeps its click behaviour and drops the
+        // selection; inside the console the press plants the caret and starts
+        // a free drag (the copy button / Ctrl+C pick up whatever was swept).
+        if (hitAt(x, y) >= 0) {
+            selAnchor_ = selHead_ = LogPos{};
+            selecting_ = false;
             invalidate();
             return;
         }
+        if (!innerRect_.contains(x, y)) return;
         selecting_ = true;
-        selAnchor_ = selHead_ = lineAt(y);
+        selAnchor_ = selHead_ = posAt(x, y);
         invalidate();
     }
 
@@ -2609,7 +2631,7 @@ protected:
             } else if (dy > innerRect_.h) {
                 scroll_ = std::min(scrollMax_, scroll_ + (dy - innerRect_.h));
             }
-            selHead_ = lineAt(y);
+            selHead_ = posAt(x, y);
             invalidate();
             return;
         }
@@ -2665,15 +2687,9 @@ protected:
                 return false;
             case 'A':
                 if (ctrl) {
-                    selAnchor_ = 0;
-                    selHead_ = (int)measuredHeights_.size() - 1;
-                    invalidate();
-                    return true;
-                }
-                return false;
-            case VK_ESCAPE:
-                if (selAnchor_ >= 0) {
-                    selAnchor_ = selHead_ = -1;
+                    selAnchor_ = LogPos{0, 0};
+                    // ch is clamped against the real line length at use time.
+                    selHead_ = LogPos{(int)measuredHeights_.size() - 1, 1 << 30};
                     invalidate();
                     return true;
                 }
@@ -2693,6 +2709,13 @@ protected:
     }
 
 private:
+    // A point in the log's text space: line index plus a character offset
+    // into the *unwrapped* line.
+    struct LogPos {
+        int line = 0;
+        int ch = 0;
+    };
+
     // Maps a client y to the index of the log line under it, clamped to the
     // first/last line, or -1 when there is nothing measured yet.
     int lineAt(int y) const {
@@ -2707,30 +2730,64 @@ private:
         return (int)lo;
     }
 
-    // Normalised selection as [lo, hi] inclusive, or lo > hi when empty.
-    void selectionRange(int& lo, int& hi) const {
-        lo = std::min(selAnchor_, selHead_);
-        hi = std::max(selAnchor_, selHead_);
-        if (lo < 0) { lo = 1; hi = 0; }   // empty by construction
+    // Maps a client point onto the mono grid: y picks the line and the wrapped
+    // row within it, x the character column. Everything is clamped, so a drag
+    // that ends past the text still sticks to a well-defined position.
+    LogPos posAt(int x, int y) const {
+        LogPos pos;
+        if (lineOffsets_.empty() || !innerRect_.valid() || charW_ <= 0) return pos;
+        int line = lineAt(y);
+        if (line < 0 || (size_t)line >= measuredHeights_.size()) return pos;
+        int rowH = theme::M.px(18);
+        int top = innerRect_.y + lineOffsets_[(size_t)line] - scroll_;
+        // Row count from the cached wrapped height (rows * rowH + gap).
+        int rows = std::max(1, (measuredHeights_[(size_t)line] - theme::M.px(2)) / rowH);
+        int row = std::clamp((y - top) / rowH, 0, rows - 1);
+        int col = std::clamp((x - innerRect_.x) / charW_, 0, measuredCpl_);
+        pos.line = line;
+        pos.ch = row * measuredCpl_ + col;
+        return pos;
     }
 
-    // Puts the selected lines (or the whole log when nothing is selected) on
-    // the clipboard as CF_UNICODETEXT, then flashes the footer feedback.
+    // Normalised selection as [lo, hi]; false when empty (collapsed or unset).
+    bool selectionRange(LogPos& lo, LogPos& hi) const {
+        lo = selAnchor_;
+        hi = selHead_;
+        if (lo.line > hi.line || (lo.line == hi.line && lo.ch > hi.ch)) std::swap(lo, hi);
+        return lo.line != hi.line || lo.ch != hi.ch;
+    }
+
+    // Puts the selected text on the clipboard (CF_UNICODETEXT); with nothing
+    // selected it copies the whole log. Flashes the footer feedback afterwards.
     void copySelection() {
         const std::vector<std::wstring> lines = provider_ ? provider_() : lines_;
         if (lines.empty()) return;
-        int lo, hi;
-        selectionRange(lo, hi);
-        bool whole = lo > hi;
-        if (whole) { lo = 0; hi = (int)lines.size() - 1; }
-        hi = std::min(hi, (int)lines.size() - 1);
-        if (lo > hi) return;
-
+        LogPos lo, hi;
+        bool hasSel = selectionRange(lo, hi);
         std::wstring out;
-        for (int i = lo; i <= hi; ++i) {
-            out += lines[(size_t)i];
-            out += L"\r\n";
+        if (hasSel) {
+            lo.line = std::clamp(lo.line, 0, (int)lines.size() - 1);
+            hi.line = std::clamp(hi.line, 0, (int)lines.size() - 1);
+            lo.ch = std::clamp(lo.ch, 0, (int)lines[(size_t)lo.line].size());
+            hi.ch = std::clamp(hi.ch, 0, (int)lines[(size_t)hi.line].size());
+            if (lo.line == hi.line) {
+                out = lines[(size_t)lo.line].substr((size_t)lo.ch,
+                                                    (size_t)(hi.ch - lo.ch));
+            } else {
+                out = lines[(size_t)lo.line].substr((size_t)lo.ch) + L"\r\n";
+                for (int i = lo.line + 1; i < hi.line; ++i) {
+                    out += lines[(size_t)i];
+                    out += L"\r\n";
+                }
+                out += lines[(size_t)hi.line].substr(0, (size_t)hi.ch);
+            }
+        } else {
+            for (const std::wstring& l : lines) {
+                out += l;
+                out += L"\r\n";
+            }
         }
+        if (out.empty()) return;
         size_t bytes = (out.size() + 1) * sizeof(wchar_t);
         if (::OpenClipboard(hwnd())) {
             ::EmptyClipboard();
@@ -2747,7 +2804,7 @@ private:
             }
             ::CloseClipboard();
         }
-        copiedLines_ = (size_t)(hi - lo + 1);
+        copiedChars_ = out.size();
         copiedUntil_ = ::GetTickCount64() + 1800;
         ::SetTimer(hwnd(), 2, 150, nullptr);
     }
@@ -2760,16 +2817,17 @@ private:
     int measuredTotal_ = 0;
     int measuredW_ = 0;
     int measuredCpl_ = 1;
+    int charW_ = 0;
     size_t measuredCount_ = (size_t)-1;
     // Console box of the last paint: selection and auto-scroll need it.
     Rect innerRect_;
-    // Line selection. -1/-1 means nothing selected.
-    int selAnchor_ = -1;
-    int selHead_ = -1;
+    // Free-text selection. Equal anchor and head mean a caret (no selection).
+    LogPos selAnchor_{};
+    LogPos selHead_{};
     bool selecting_ = false;
-    // "Copied N lines" footer flash.
-        size_t copiedLines_ = 0;
-        ULONGLONG copiedUntil_ = 0;
+    // "Copied N characters" footer flash.
+    size_t copiedChars_ = 0;
+    ULONGLONG copiedUntil_ = 0;
     std::function<std::vector<std::wstring>()> provider_;
     std::wstring emptyHint_;
     // Scroll offset in pixels over the wrapped content.

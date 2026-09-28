@@ -213,19 +213,14 @@ enum class Str {
     TipWorkingSetBody,
     TipOtherBody,
     TipFreeBody,
-    // CPU tile: the secondary line is the server's own memory footprint, so it
-    // has to say "memory" - a bare "12.03 GB" under a CPU figure reads as if
-    // the tile were showing two CPU numbers.
-    MetricCpuProcMem,
+    // CPU tile: the secondary line is the server's own CPU share, so the
+    // figure under the total CPU% is the same quantity scoped to llama-server.
+    MetricCpuProc,
     // Log viewer: the log is drawn by hand, so copying needs an explicit
-    // button, a hint that lines can be selected, and feedback after a copy.
+    // button, a hint that text can be selected, and feedback after a copy.
     LogCopy,
-    LogCopiedCount,
+    LogCopiedChars,
     LogSelectHint,
-    // The appearance choice is no longer applied while the dialog is open; it
-    // waits for 保存. Say so next to the control, otherwise the three options
-    // look broken.
-    ThemeApplyHint,
     ConfigsCount,
 };
 

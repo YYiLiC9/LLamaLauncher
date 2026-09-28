@@ -786,16 +786,16 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         Rect r{x, y, tileW, tileH};
         double f = monitor_.cpuPercent() / 100.0;
         std::wstring primary = util::format(L"%d%%", monitor_.cpuPercent());
-        // Secondary line: the server's own *memory* footprint. It has to be
-        // labelled - a bare "12.03 GB" sitting under a CPU percentage reads as
-        // a second CPU figure, which is exactly the question it raised. (The
-        // per-process CPU counter is not used here: it has no data for the
-        // first couple of samples, and none at all for an adopted process.)
-        std::wstring secondary = util::format(
-            T(Str::MetricCpuProcMem),
-            monitor_.processWorkingSet()
-                ? util::humanBytes(monitor_.processWorkingSet()).c_str()
-                : T(Str::NotAvailable));
+        // Secondary line: the server's own CPU share - the tile's quantity
+        // scoped to llama-server (kernel+user time over the sample interval).
+        // Memory did not belong here: it read as a second CPU figure, and the
+        // working set already shows in the capacity card as a labelled slice.
+        // The counter needs two samples, so a just-started server shows the
+        // plain total until the next tick.
+        std::wstring secondary;
+        if (monitor_.processWorkingSet())
+            secondary = util::format(T(Str::MetricCpuProc),
+                                     util::format(L"%d%%", monitor_.processCpuPercent()).c_str());
         shell::metricTile(c, r, T(Str::MetricCpu), primary, secondary, f, kCpuColor,
                           shell::glyphs::kChip);
     }
