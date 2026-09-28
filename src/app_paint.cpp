@@ -786,14 +786,16 @@ void App::paintRunning(Canvas& c, const Rect& area, const store::Config& cfg) {
         Rect r{x, y, tileW, tileH};
         double f = monitor_.cpuPercent() / 100.0;
         std::wstring primary = util::format(L"%d%%", monitor_.cpuPercent());
-        // Secondary line: the server's own footprint. The per-process CPU
-        // counter has no data for the first couple of samples (and none at
-        // all for an adopted process) - showing 不可用 there read like the
-        // whole CPU tile was broken.
-        std::wstring secondary =
+        // Secondary line: the server's own *memory* footprint. It has to be
+        // labelled - a bare "12.03 GB" sitting under a CPU percentage reads as
+        // a second CPU figure, which is exactly the question it raised. (The
+        // per-process CPU counter is not used here: it has no data for the
+        // first couple of samples, and none at all for an adopted process.)
+        std::wstring secondary = util::format(
+            T(Str::MetricCpuProcMem),
             monitor_.processWorkingSet()
-                ? util::humanBytes(monitor_.processWorkingSet())
-                : std::wstring(T(Str::NotAvailable));
+                ? util::humanBytes(monitor_.processWorkingSet()).c_str()
+                : T(Str::NotAvailable));
         shell::metricTile(c, r, T(Str::MetricCpu), primary, secondary, f, kCpuColor,
                           shell::glyphs::kChip);
     }

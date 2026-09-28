@@ -64,6 +64,9 @@ protected:
     // can be created and positioned.
     virtual void onLayout() {}
     virtual void onDestroy() {}
+    // Forwarded from WM_TIMER with the timer id. The base class repaints on
+    // every tick; override to stop a timer that has done its job.
+    virtual void onTimer(WPARAM id) { (void)id; }
 
     // ---- services ----
     void addHit(const Rect& r, int id, bool enabled = true);

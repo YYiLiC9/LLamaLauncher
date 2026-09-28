@@ -245,6 +245,12 @@ static const Entry kTable[] = {
                       L"that is not llama-server.",
                       L"该设备上除 llama-server 之外的所有占用：桌面、浏览器及其他程序。"},
     /*TipFreeBody*/ {L"Capacity nobody is using.", L"尚未被任何进程占用的容量。"},
+    /*MetricCpuProcMem*/ {L"Process RAM %s", L"进程内存 %s"},
+    /*LogCopy*/ {L"Copy", L"复制"},
+    /*LogCopiedCount*/ {L"Copied %zu lines", L"已复制 %zu 行"},
+    /*LogSelectHint*/ {L"Drag over the lines to select, Ctrl+C to copy",
+                       L"拖过日志行即可选中，Ctrl+C 复制"},
+    /*ThemeApplyHint*/ {L"Applied when you save", L"点击保存后生效"},
     /*ConfigsCount*/ {L"configs", L"个配置"},
 };
 

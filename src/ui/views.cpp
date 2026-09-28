@@ -438,6 +438,12 @@ protected:
         addHit(Rect{tseg.x + third * 2, tseg.y, tseg.w - third * 2, tseg.h}, ID_THEME_DARK);
         segmented(c, tseg, {T(Str::ThemeSystem), T(Str::ThemeLight), T(Str::ThemeDark)},
                   (int)themeMode_, themeHover(), themePress());
+        // The choice no longer previews, so say when it lands - otherwise the
+        // control looks like it did nothing.
+        c.text(Rect{tseg.right() + theme::M.px(12), tseg.y,
+                    w - (tseg.right() - x) - theme::M.px(12), tseg.h},
+               T(Str::ThemeApplyHint), theme::TextTertiary, theme::fontCaption(),
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
         // Row 3: tray behaviour. Closing the window can hide it to the tray
         // instead of quitting, so a running server survives a stray click on X.
@@ -575,21 +581,19 @@ protected:
                 i18n::set(language_);
                 break;
 
-            // Theme: applied straight away so the dialog itself previews it.
+            // Appearance is only recorded here. Switching the palette live
+            // meant Cancel left the app in the previewed theme while the
+            // stored setting still said the old one - reopening the dialog
+            // then highlighted a different option than the one in effect.
+            // The owner applies the choice when it saves.
             case ID_THEME_SYSTEM:
                 themeMode_ = theme::ThemeMode::System;
-                theme::setThemeMode(themeMode_);
-                repaintForTheme();
                 break;
             case ID_THEME_LIGHT:
                 themeMode_ = theme::ThemeMode::Light;
-                theme::setThemeMode(themeMode_);
-                repaintForTheme();
                 break;
             case ID_THEME_DARK:
                 themeMode_ = theme::ThemeMode::Dark;
-                theme::setThemeMode(themeMode_);
-                repaintForTheme();
                 break;
 
             case ID_AUTODETECT: {
@@ -2385,6 +2389,7 @@ protected:
 
     void onDestroy() override {
         ::KillTimer(hwnd(), 1);
+        ::KillTimer(hwnd(), 2);
     }
     void onPaint(Canvas& c, const Rect& client) override {
         // Live mode pulls the current lines; snapshot mode uses the stored copy.
@@ -2442,11 +2447,16 @@ protected:
             int charW = std::max(1, (int)(sz.cx / 5));
             int cpl = std::max(1, wrapW / charW);
             measuredHeights_.assign(lines.size(), 0);
+            // Top of every line in content space. Selection is hit-tested
+            // against these, so a click can be mapped back to a line index
+            // without walking the list again.
+            lineOffsets_.assign(lines.size(), 0);
             int total = 0;
             for (size_t i = 0; i < lines.size(); ++i) {
                 int rows = (int)((lines[i].size() + cpl - 1) / cpl);
                 int h = std::max(rows, 1) * theme::M.px(18) + theme::M.px(2);
                 measuredHeights_[i] = h;
+                lineOffsets_[i] = total;
                 total += h;
             }
             ::SelectObject(c.dc(), oldMono);
@@ -2455,6 +2465,7 @@ protected:
             measuredCount_ = lines.size();
             measuredCpl_ = cpl;
         }
+        innerRect_ = inner;
         // Pixel offset rather than a page index: the log grows a line at a
         // time, and a page boundary used to jump a screenful - which made
         // following a live tail impossible.
@@ -2467,12 +2478,21 @@ protected:
 
         int shown = 0;
         int acc = 0;
+        // Text never leaves the console box. Without a clip region the rows of
+        // a line that is only partly scrolled in were drawn straight across
+        // the frame below (and above) - the "log overflows its border" effect.
+        // The highlight for selected lines is drawn inside the same region.
+        int selLo = -1, selHi = -1;
+        selectionRange(selLo, selHi);
+        int saved = ::SaveDC(c.dc());
+        ::IntersectClipRect(c.dc(), inner.x, inner.y, inner.right(), inner.bottom());
         for (size_t i = 0; i < lines.size(); ++i) {
             int h = measuredHeights_[i];
             int top = acc - scroll_;
             acc += h;
             if (top + h <= 0) continue;         // entirely above the view
             if (top >= inner.h) break;          // entirely below it
+            bool selected = (int)i >= selLo && (int)i <= selHi;
             COLORREF col = theme::TextSecondary;
             std::wstring low = util::lower(lines[i]);
             if (util::contains(low, L"error") || util::contains(low, L"failed"))
@@ -2484,13 +2504,14 @@ protected:
             const std::wstring& s = lines[i];
             int rows = (int)((s.size() + measuredCpl_ - 1) / measuredCpl_);
             for (int cj = 0; cj < rows; ++cj) {
-                std::wstring chunk = s.substr((size_t)cj * measuredCpl_, measuredCpl_);
                 Rect lr{inner.x, inner.y + top + cj * theme::M.px(18), inner.w, theme::M.px(18)};
-                c.text(lr, chunk, col, theme::fontMono(),
-                       DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+                if (selected) c.fill(lr, theme::SelectedBg);
+                c.text(lr, s.substr((size_t)cj * measuredCpl_, measuredCpl_), col,
+                       theme::fontMono(), DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
             }
             ++shown;
         }
+        ::RestoreDC(c.dc(), saved);
         (void)shown;
         if (lines.empty()) {
             c.textBlock(inner, emptyHint_.empty() ? T(Str::LogEmpty) : emptyHint_,
@@ -2518,9 +2539,26 @@ protected:
         int bw = theme::M.px(100);
         int bh = theme::M.px(34);
         Rect closeBtn{client.w - theme::M.px(16) - bw, client.h - theme::M.px(16) - bh, bw, bh};
+        Rect copyBtn{closeBtn.x - theme::M.px(10) - bw, closeBtn.y, bw, bh};
+        addHit(copyBtn, ID_COPY_LOG);
         addHit(closeBtn, ID_CANCEL);
+        shell::button(c, copyBtn, T(Str::LogCopy), shell::ButtonStyle::Secondary,
+                      isHovered(ID_COPY_LOG), isPressed(ID_COPY_LOG), false,
+                      shell::glyphs::kCopy);
         shell::button(c, closeBtn, T(Str::Close), shell::ButtonStyle::Secondary,
                       isHovered(ID_CANCEL), isPressed(ID_CANCEL), false);
+
+        // Footer hint doubles as the post-copy feedback: selection exists, so
+        // say how to use it, and after a copy say how much landed on the
+        // clipboard (a 200 ms timer keeps this fading out on its own).
+        Rect hint{theme::M.px(16), copyBtn.y, copyBtn.x - theme::M.px(26), copyBtn.h};
+        if (::GetTickCount64() < copiedUntil_)
+            c.text(hint, util::format(T(Str::LogCopiedCount), copiedLines_), theme::Success,
+                   theme::fontCaption(),
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        else
+            c.text(hint, T(Str::LogSelectHint), theme::TextTertiary, theme::fontCaption(),
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
 
     void onMouseWheel(int delta, int, int) override {
@@ -2541,13 +2579,40 @@ protected:
     // Dragging the thumb: the travel the thumb has is the whole scroll range,
     // so the mapping is a ratio rather than a one-to-one pixel move.
     void onLButtonDown(int x, int y) override {
-        if (scrollMax_ <= 0 || !trackRect_.contains(x, y)) return;
-        dragging_ = true;
-        dragY_ = y;
-        dragScroll_ = scroll_;
+        if (scrollMax_ > 0 && trackRect_.contains(x, y)) {
+            dragging_ = true;
+            dragY_ = y;
+            dragScroll_ = scroll_;
+            return;
+        }
+        // Anywhere else in the console starts a line selection, which is what
+        // Ctrl+C (or the copy button) then puts on the clipboard. Points over
+        // a registered control keep their click behaviour.
+        if (hitAt(x, y) >= 0 || !innerRect_.contains(x, y)) {
+            selAnchor_ = selHead_ = -1;
+            invalidate();
+            return;
+        }
+        selecting_ = true;
+        selAnchor_ = selHead_ = lineAt(y);
+        invalidate();
     }
 
     void onMouseMove(int x, int y) override {
+        if (selecting_) {
+            // Dragging past the edges auto-scrolls, so a selection wider than
+            // one screen is still reachable with the wheel-free pointer.
+            int dy = y - innerRect_.y;
+            if (dy < 0) {
+                scroll_ = std::max(0, scroll_ + dy);
+                followTail_ = false;
+            } else if (dy > innerRect_.h) {
+                scroll_ = std::min(scrollMax_, scroll_ + (dy - innerRect_.h));
+            }
+            selHead_ = lineAt(y);
+            invalidate();
+            return;
+        }
         if (!dragging_) {
             // The framework clears the hover id before dispatching here, so the
             // tail button only lights up if the dialog restores it.
@@ -2561,13 +2626,21 @@ protected:
         invalidate();
     }
 
-    void onLButtonUp(int, int) override { dragging_ = false; }
+    void onLButtonUp(int, int) override {
+        dragging_ = false;
+        selecting_ = false;
+    }
+
+    void onMouseLeave() override { selecting_ = false; }
 
     void onClick(int id) override {
         switch (id) {
             case ID_BOTTOM:
                 followTail_ = true;
                 scroll_ = scrollMax_;
+                break;
+            case ID_COPY_LOG:
+                copySelection();
                 break;
             case ID_CANCEL:
                 close(DialogResult::Ok);
@@ -2581,11 +2654,30 @@ protected:
     bool onKeyDown(WPARAM key) override {
         // Page/End/Home on a log that can be thousands of lines long.
         int pageStep = std::max(1, lastViewH_ - theme::M.px(18));
+        bool ctrl = (::GetKeyState(VK_CONTROL) & 0x8000) != 0;
         switch (key) {
             case VK_PRIOR: scroll_ -= pageStep; followTail_ = false; break;
             case VK_NEXT:  scroll_ += pageStep; break;
             case VK_HOME:  scroll_ = 0; followTail_ = false; break;
             case VK_END:   scroll_ = scrollMax_; followTail_ = true; break;
+            case 'C':
+                if (ctrl) { copySelection(); invalidate(); return true; }
+                return false;
+            case 'A':
+                if (ctrl) {
+                    selAnchor_ = 0;
+                    selHead_ = (int)measuredHeights_.size() - 1;
+                    invalidate();
+                    return true;
+                }
+                return false;
+            case VK_ESCAPE:
+                if (selAnchor_ >= 0) {
+                    selAnchor_ = selHead_ = -1;
+                    invalidate();
+                    return true;
+                }
+                return false;
             default: return false;
         }
         scroll_ = std::clamp(scroll_, 0, scrollMax_);
@@ -2594,14 +2686,90 @@ protected:
         return true;
     }
 
+    void onTimer(WPARAM id) override {
+        // The "copied N lines" footer flash: stop the repaint timer once the
+        // message has expired.
+        if (id == 2 && ::GetTickCount64() >= copiedUntil_) ::KillTimer(hwnd(), 2);
+    }
+
 private:
+    // Maps a client y to the index of the log line under it, clamped to the
+    // first/last line, or -1 when there is nothing measured yet.
+    int lineAt(int y) const {
+        if (lineOffsets_.empty() || !innerRect_.valid()) return -1;
+        int dy = y - innerRect_.y + scroll_;
+        if (dy < 0) return 0;
+        size_t lo = 0, hi = lineOffsets_.size();
+        while (lo + 1 < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (lineOffsets_[mid] <= dy) lo = mid; else hi = mid;
+        }
+        return (int)lo;
+    }
+
+    // Normalised selection as [lo, hi] inclusive, or lo > hi when empty.
+    void selectionRange(int& lo, int& hi) const {
+        lo = std::min(selAnchor_, selHead_);
+        hi = std::max(selAnchor_, selHead_);
+        if (lo < 0) { lo = 1; hi = 0; }   // empty by construction
+    }
+
+    // Puts the selected lines (or the whole log when nothing is selected) on
+    // the clipboard as CF_UNICODETEXT, then flashes the footer feedback.
+    void copySelection() {
+        const std::vector<std::wstring> lines = provider_ ? provider_() : lines_;
+        if (lines.empty()) return;
+        int lo, hi;
+        selectionRange(lo, hi);
+        bool whole = lo > hi;
+        if (whole) { lo = 0; hi = (int)lines.size() - 1; }
+        hi = std::min(hi, (int)lines.size() - 1);
+        if (lo > hi) return;
+
+        std::wstring out;
+        for (int i = lo; i <= hi; ++i) {
+            out += lines[(size_t)i];
+            out += L"\r\n";
+        }
+        size_t bytes = (out.size() + 1) * sizeof(wchar_t);
+        if (::OpenClipboard(hwnd())) {
+            ::EmptyClipboard();
+            HGLOBAL h = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if (h) {
+                void* p = ::GlobalLock(h);
+                if (p) {
+                    ::memcpy(p, out.c_str(), bytes);
+                    ::GlobalUnlock(h);
+                    if (!::SetClipboardData(CF_UNICODETEXT, h)) ::GlobalFree(h);
+                } else {
+                    ::GlobalFree(h);
+                }
+            }
+            ::CloseClipboard();
+        }
+        copiedLines_ = (size_t)(hi - lo + 1);
+        copiedUntil_ = ::GetTickCount64() + 1800;
+        ::SetTimer(hwnd(), 2, 150, nullptr);
+    }
+
     std::vector<std::wstring> lines_;
     // Wrapped-height cache for the console view (see onPaint).
     std::vector<int> measuredHeights_;
+    // Top of each line in content space; drives selection hit-testing.
+    std::vector<int> lineOffsets_;
     int measuredTotal_ = 0;
     int measuredW_ = 0;
     int measuredCpl_ = 1;
     size_t measuredCount_ = (size_t)-1;
+    // Console box of the last paint: selection and auto-scroll need it.
+    Rect innerRect_;
+    // Line selection. -1/-1 means nothing selected.
+    int selAnchor_ = -1;
+    int selHead_ = -1;
+    bool selecting_ = false;
+    // "Copied N lines" footer flash.
+        size_t copiedLines_ = 0;
+        ULONGLONG copiedUntil_ = 0;
     std::function<std::vector<std::wstring>()> provider_;
     std::wstring emptyHint_;
     // Scroll offset in pixels over the wrapped content.

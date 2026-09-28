@@ -162,11 +162,13 @@ void App::dispatch(const Hit& hit) {
         case Action::OpenSettings: {
             bool changed = false;
             if (views::settingsDialog(hwnd_, store_, changed)) {
-                // The dialog previews the theme while it is open, but the
-                // setting may have been abandoned with Cancel - so re-apply
-                // whatever is actually stored, then repaint the whole window.
+                // The dialog only records the appearance choice; applying it
+                // is the owner's job, and only happens here - on Save. Cancel
+                // therefore leaves the theme exactly as it was.
                 theme::setThemeMode(theme::modeFromSetting(store_.settings().theme));
                 applyChrome();
+                // The chat page follows the same palette (prefers-color-scheme).
+                webView_.applyTheme();
                 refresh();
                 placeSearchEdit();
                 ::InvalidateRect(hwnd_, nullptr, TRUE);

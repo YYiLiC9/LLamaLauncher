@@ -138,6 +138,13 @@ bool Dialog::run(HWND owner, const std::wstring& title, int width, int height, b
     if (owner) {
         ::EnableWindow(owner, TRUE);
         ::SetActiveWindow(owner);
+        // One synchronous, complete repaint now that the dialog is gone. Left
+        // to the queue, the uncovered region, the re-enable and the activation
+        // each produced their own partial frame - together they read as the
+        // main window flickering when any child window closed.
+        ::RedrawWindow(owner, nullptr, nullptr,
+                       RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE | RDW_FRAME |
+                           RDW_UPDATENOW);
     }
     if (hwnd_) {
         HWND h = hwnd_;
@@ -285,6 +292,7 @@ LRESULT CALLBACK Dialog::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_TIMER:
             // Used by live dialogs (the log viewer) to refresh themselves.
+            self->onTimer(wp);
             self->invalidate();
             break;
 

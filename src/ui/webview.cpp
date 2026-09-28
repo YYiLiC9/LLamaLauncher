@@ -280,6 +280,28 @@ void WebView::reload() {
     if (core_ && initialised_) ((ICoreWebView2*)core_)->Reload();
 }
 
+// The embedded page is llama-server's chat UI, which styles itself from the
+// prefers-color-scheme media query. WebView2 exposes exactly that knob as
+// PreferredColorScheme on the profile, so handing it the app's resolved
+// palette keeps the browser pane in the same light/dark theme as the hand-
+// drawn GDI surface around it.
+void WebView::applyTheme() {
+    if (!core_) return;
+    // The profile lives behind ICoreWebView2_13. QI-ing that interface (rather
+    // than blind-casting) keeps an older runtime a no-op instead of a call
+    // through a vtable slot it does not have.
+    ICoreWebView2_13* core13 = nullptr;
+    if (FAILED(((ICoreWebView2*)core_)->QueryInterface(&core13)) || !core13) return;
+    ICoreWebView2Profile* profile = nullptr;
+    if (SUCCEEDED(core13->get_Profile(&profile)) && profile) {
+        profile->put_PreferredColorScheme(theme::isDarkMode()
+                                              ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK
+                                              : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT);
+        profile->Release();
+    }
+    core13->Release();
+}
+
 // Runs from the posted init message: the controller callback has fully
 // returned, so the object can now be called into.
 void WebView::completeInit() {
@@ -290,6 +312,7 @@ void WebView::completeInit() {
     // user is host-window visibility (see setVisible).
     ((ICoreWebView2Controller*)controller_)->put_IsVisible(TRUE);
     settings();
+    applyTheme();
     applyBounds();
     if (!pendingUrl_.empty() && core_)
         ((ICoreWebView2*)core_)->Navigate(pendingUrl_.c_str());

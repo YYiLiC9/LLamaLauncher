@@ -216,6 +216,16 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ERASEBKGND:
             return 1;   // fully covered by WM_PAINT
 
+        case WM_ENABLE:
+            // EnableWindow(FALSE/TRUE) around every modal dialog asks
+            // DefWindowProc to repaint this window. The client is hand-drawn
+            // and looks identical either way, so those full repaints are pure
+            // churn - and the pair of them (open + close of the dialog) is
+            // what made the main window flash whenever a child window went
+            // away. Nothing needs repainting here; the real paint is driven
+            // by invalidation as usual.
+            return 0;
+
         // The search box is a real EDIT and paints its own white background
         // whatever the palette says, so it has to be answered here too.
         case WM_CTLCOLOREDIT:
@@ -243,6 +253,8 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // changes the accent colour.
             theme::refreshSystemTheme();
             applyWindowChrome(hwnd);
+            // The embedded chat page follows the app's resolved palette too.
+            self->webView_.applyTheme();
             ::InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 

@@ -39,6 +39,12 @@ public:
     void navigate(const std::wstring& url);
     void reload();
 
+    // Makes the page's prefers-color-scheme match the app palette, so the
+    // chat UI (which follows the system preference) paints in the same
+    // light/dark theme as everything around it. Safe to call at any point of
+    // the initialisation; applies as soon as the browser is ready.
+    void applyTheme();
+
     // WebView2 only presents while its controller is marked visible, which does
     // not follow the parent window automatically. Call this after showing or
     // hiding the pane.
