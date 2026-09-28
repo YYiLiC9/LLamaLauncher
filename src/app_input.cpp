@@ -11,6 +11,7 @@
 #include "core/i18n.h"
 #include "core/paths.h"
 #include "core/util.h"
+#include "core/version.h"
 #include "ui/theme.h"
 
 using shell::Rect;
@@ -224,7 +225,7 @@ void App::dispatch(const Hit& hit) {
 
         case Action::OpenHelp: {
             views::HelpContext ctx;
-            ctx.version = L"1.0.0";
+            ctx.version = appVersion();
             ctx.dataDir = paths::dataRoot();
             ctx.llamaPath = store_.effectiveLlamaDir();
             views::helpDialog(hwnd_, ctx);

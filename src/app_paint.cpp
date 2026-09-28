@@ -11,6 +11,7 @@
 #include "core/i18n.h"
 #include "core/paths.h"
 #include "core/util.h"
+#include "core/version.h"
 #include "ui/theme.h"
 
 using shell::Canvas;
@@ -1282,11 +1283,12 @@ void App::paintBottomBar(Canvas& c, const Frame& f) {
                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
-    // Version mark, right aligned.
-    Rect versionRect{f.bottomBar.right() - theme::M.px(56), f.bottomBar.y, theme::M.px(44),
+    // Version mark, right aligned. Width is generous enough for a describe
+    // suffix like "v1.0.0-3-g62b0993" without eating into the status text.
+    Rect versionRect{f.bottomBar.right() - theme::M.px(140), f.bottomBar.y, theme::M.px(128),
                      f.bottomBar.h};
-    c.text(versionRect, L"v1.0", theme::TextTertiary, theme::fontCaption(),
-           DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    c.text(versionRect, appVersion(), theme::TextTertiary, theme::fontCaption(),
+           DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
     // Transient toast (for example "copied to clipboard").
     if (!toast_.empty() && util::nowSeconds() <= toastUntil_) {

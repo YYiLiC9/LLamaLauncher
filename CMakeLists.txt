@@ -9,6 +9,28 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ---- version ----------------------------------------------------------------
+# Stamp the build with `git describe` (the tag, or <tag>-<n>-g<hash> past it),
+# so the binary itself says what was built. Source archives without git
+# metadata fall back to the project() version.
+find_package(Git QUIET)
+set(APP_VERSION "${PROJECT_VERSION}")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --always
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_DESCRIBE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE GIT_DESCRIBE_RESULT)
+    if(GIT_DESCRIBE_RESULT EQUAL 0 AND GIT_DESCRIBE)
+        set(APP_VERSION "${GIT_DESCRIBE}")
+    endif()
+endif()
+message(STATUS "LlamaLauncher version: ${APP_VERSION}")
+# Directory scope: the target does not exist yet this early in the file.
+add_compile_definitions(APP_VERSION_W=L"${APP_VERSION}")
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
